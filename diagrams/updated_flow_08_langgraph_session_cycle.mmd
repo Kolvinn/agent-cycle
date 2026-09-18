@@ -1,0 +1,77 @@
+flowchart TD
+    Start(["👤 User opens session<br/>with a message"]) --> CL
+
+    subgraph CYCLE["🔄 The session loop — every path returns to classify"]
+        direction TB
+
+        CL["🔒 CLASSIFY node<br/>with_structured_output · json_schema<br/>enum only · no free prose allowed"]
+        CL --> R{"🔀 conditional edge<br/>route on the locked classification"}
+
+        R -->|"user stated something"| EV["📌 EXTRACT_VERBATIM<br/>quote it exactly<br/>write depth-0 node"]
+        R -->|"model drew a conclusion"| IN["🧩 ATTACH_REASONING<br/>link to parent node<br/>depth = parent + 1"]
+        R -->|"model wants to act"| GT["🛡️ GATE<br/>severity × depth → outcome"]
+        R -->|"premise looks false"| CT["🟠 CONTEST<br/>state the contradiction"]
+        R -->|"nothing left open"| DN{"🏁 every implicit closed?"}
+
+        GT -->|"allow"| EX["⚙️ EXECUTE tool<br/>result tagged with node id"]
+        GT -->|"propose"| PR["📝 PROPOSE<br/>synthesised ToolMessage<br/>nothing runs"]
+        GT -->|"ask"| AS
+        GT -->|"block"| RJ["⛔ RECORD REJECTION"]
+
+        CT --> AS["🙋 ASK node · interrupt<br/>the only node that waits on a human"]
+        AS -->|"approved"| PROM["🟢 PROMOTE to explicit<br/>chain resets"]
+        AS -->|"denied"| RJ
+        AS -->|"silence"| PK["🅿️ PARK as open"]
+
+        EV --> CNT
+        IN --> CNT
+        EX --> CNT
+        PR --> CNT
+        RJ --> CNT
+        PK --> CNT
+        PROM --> CNT
+        CNT["🔢 COUNT + RECONCILE?<br/>bookkeeping calls exempt"]
+        CNT -->|"cadence not reached"| CL
+        CNT -->|"cadence reached"| RC["📒 RECONCILE<br/>re-derive every open implicit"]
+        RC --> CL
+
+        DN -->|"no · open implicits remain"| CL
+    end
+
+    DN -->|"yes"| End(["✅ Session complete"])
+
+    ST[("🗂️ Ledger + AgentState<br/>nodes · sources · depths · policy used")]
+    EV <--> ST
+    IN <--> ST
+    GT <--> ST
+    RC <--> ST
+
+    subgraph MODEL["🤖 Model calls — all of these hit the CLI"]
+        direction LR
+        CCLI["ChatClaudeCli · auth=oauth<br/>subscription login, not API key"] --> SUB["🖥️ claude CLI subprocess"]
+        SUB -.->|"built-ins Read/Edit/Bash live here.<br/>Disable them and this becomes<br/>a plain text + JSON endpoint."| OFF["🔇 disallowed_tools"]
+    end
+
+    CL -.->|"structured call"| CCLI
+    IN -.->|"structured call"| CCLI
+    CT -.->|"structured call"| CCLI
+
+    classDef startEnd fill:#E6E6FA,stroke:#333,stroke-width:2px,color:darkblue
+    classDef node fill:#87CEEB,stroke:#333,stroke-width:2px,color:darkblue
+    classDef decision fill:#FFD700,stroke:#333,stroke-width:2px,color:black
+    classDef explicit fill:#90EE90,stroke:#2E7D2E,stroke-width:2px,color:darkgreen
+    classDef implicit fill:#F0D58C,stroke:#8a6d1d,stroke-width:2px,color:black
+    classDef gate fill:#FFA500,stroke:#333,stroke-width:3px,color:black
+    classDef blocked fill:#FFB6C1,stroke:#DC143C,stroke-width:2px,color:black
+    classDef store fill:#E6E6FA,stroke:#333,stroke-width:2px,color:darkblue
+    classDef cli fill:#D8BFD8,stroke:#5c3d5c,stroke-width:2px,color:#2a1a2a
+
+    class Start,End startEnd
+    class CL,CNT,RC,EX node
+    class R,DN decision
+    class EV,PROM explicit
+    class IN implicit
+    class GT,AS,CT,PR gate
+    class RJ,PK blocked
+    class ST store
+    class CCLI,SUB,OFF cli

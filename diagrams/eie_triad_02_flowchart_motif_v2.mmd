@@ -1,0 +1,19 @@
+flowchart LR
+    E0["🟢 EXPLICIT<br/>Tier A only<br/>verbatim user words"]
+    I1["🟡 IMPLICIT<br/>the agent's OWN assumption,<br/>literalized into a checkable claim<br/>— NOT the tool's raw output"]
+    E1["🟢 EXPLICIT<br/>Tier A only<br/>user confirms or corrects —<br/>self-report never counts"]
+    Next(["next triad's E"])
+    Blocked["🚫 forbidden edge<br/>a second read/claim whose<br/>target only makes sense<br/>if I1 is already true"]
+
+    E0 -->|"agent forms an assumption from<br/>evidence and literalizes it —<br/>exactly one explicit parent, always"| I1
+    I1 -->|"the only legal close:<br/>ask the user directly"| E1
+    E1 -.->|"only now can a new<br/>implicit be grounded here"| Next
+    I1 -.->|"forbidden — this is the<br/>'multi-hop read' failure"| Blocked
+
+    classDef explicit fill:#90EE90,stroke:#2E7D2E,stroke-width:2px,color:darkgreen
+    classDef implicit fill:#F0D58C,stroke:#8a6d1d,stroke-width:2px,color:black
+    classDef forbidden fill:#8a2b2b,stroke:#5c1c1c,stroke-width:2px,color:#fff,stroke-dasharray:4 4
+
+    class E0,E1 explicit
+    class I1 implicit
+    class Blocked forbidden

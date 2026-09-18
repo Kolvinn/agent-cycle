@@ -1,0 +1,43 @@
+flowchart TD
+    Claim(["📄 A claim of the form<br/>'the user decided X'"]) --> Tier{"🔍 What is this claim<br/>actually sourced from?"}
+
+    Tier -->|"verbatim turn,<br/>THIS session"| TA["🟢 TIER A<br/>user's own words, in context"]
+    Tier -->|"verbatim turn in an<br/>archived transcript"| TB["🟡 TIER B<br/>user's own words, stale context"]
+    Tier -->|"an agent's written summary<br/>'the user explicitly rejected X'"| TC["🔴 TIER C<br/>model output about a user decision"]
+    Tier -->|"a label with no source at all<br/>e.g. tagged USER CONFIRMED"| TD["🔴 TIER D<br/>unsourced authority label"]
+
+    TA -->|"full authority"| OK["✅ EXPLICIT · depth 0<br/>safe to act on"]
+
+    TB --> Age{"⏳ Does it still bind?<br/>context may have moved"}
+    Age -->|"re-confirm with user"| RC
+    TC --> Trace{"🔎 Can it be traced to a<br/>Tier A or Tier B source?"}
+    TD --> Trace
+    Trace -->|"yes · quote located"| TB
+    Trace -->|"no · nothing underneath"| Strip["⬇️ STRIP THE LABEL<br/>demote to implicit"]
+
+    Strip --> RC
+    RC{{"🙋 Ask the user directly<br/>never infer the answer"}}
+    RC -->|"confirmed"| OK
+    RC -->|"corrected"| OK
+    RC -->|"no answer"| Park["🅿️ PARKED OPEN<br/>carries no authority<br/>must not be cited as decided"]
+
+    Park -.->|"the historical failure:<br/>parked item silently read as settled,<br/>then propagated as fact"| Laundry["☠️ LABEL LAUNDERING<br/>implicit wearing an explicit label"]
+    Laundry -.->|"caught only by an agent whose<br/>whole mandate was re-deriving source"| Trace
+
+    classDef startEnd fill:#E6E6FA,stroke:#333,stroke-width:2px,color:darkblue
+    classDef decision fill:#FFD700,stroke:#333,stroke-width:2px,color:black
+    classDef tierA fill:#90EE90,stroke:#2E7D2E,stroke-width:2px,color:darkgreen
+    classDef tierB fill:#F0D58C,stroke:#8a6d1d,stroke-width:2px,color:black
+    classDef tierC fill:#FFB6C1,stroke:#DC143C,stroke-width:2px,color:black
+    classDef gate fill:#FFA500,stroke:#333,stroke-width:3px,color:black
+    classDef open fill:#E0E0E0,stroke:#666,stroke-width:2px,stroke-dasharray:5 3,color:black
+    classDef danger fill:#8a2b2b,stroke:#5c1c1c,stroke-width:2px,color:#fff
+
+    class Claim startEnd
+    class Tier,Age,Trace decision
+    class TA,OK tierA
+    class TB,Strip tierB
+    class TC,TD tierC
+    class RC gate
+    class Park open
+    class Laundry danger

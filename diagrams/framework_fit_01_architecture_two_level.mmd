@@ -1,0 +1,70 @@
+flowchart TB
+    subgraph OUTER["🕸️ OUTER — the control wrapper we own · LangGraph"]
+        direction TB
+
+        ST[("🗂️ Flow state · pydantic BaseModel<br/>reducer channels accumulate the ledger<br/>spike 6 · A")]
+
+        subgraph T1["Turn 1 — affirming"]
+            direction TB
+            N1["① extract<br/>HITL gated"]
+            N2["② budget context"]
+            N3["③ assume<br/>writes thesis_reasoning"]
+            N1 --> N2 --> N3
+        end
+
+        HOLD{{"🙋 interrupt(call, price)<br/>approval is on the CALL, not a message<br/>nothing above it may cost · spike 7"}}
+
+        subgraph T2["Turn 2 — adversarial, internal"]
+            direction TB
+            N4["④ antithesis<br/>input_schema=AntithesisView<br/>thesis_reasoning is NOT a field on it<br/>spike 6 · B"]
+        end
+
+        subgraph T3["Turn 3 — present + reconcile"]
+            direction TB
+            N5["⑤ present<br/>⚠️ EXPLORATION REQUIRED"]
+        end
+
+        CP[("💾 checkpointer<br/>update_state on a past checkpoint<br/>branches — the context edit · spike 6 · D")]
+
+        N3 --> HOLD
+        HOLD --> N4
+        N4 --> N5
+    end
+
+    subgraph INNER["🤖 INNER — the Agent SDK harness, opened per node"]
+        direction TB
+        QRY["claude_agent_sdk.query()<br/>tools=[] · allowed_tools=[]<br/>an allow-list, since deny-listing leaked"]
+        MCPS["🔌 in-process MCP server<br/>create_sdk_mcp_server · our tools ONLY"]
+        CUT{{"🛡️ can_use_tool<br/>every priced call passes here<br/>price it, then allow or deny"}}
+        FMT["📐 output_format json_schema<br/>arrives as the synthetic StructuredOutput tool<br/>invisible to the gate · never charge it"]
+        SUB["🖥️ claude CLI subprocess<br/>env blanks ANTHROPIC_API_KEY<br/>→ OAuth, subscription billing"]
+        QRY --> MCPS --> CUT
+        QRY --> FMT
+        QRY --> SUB
+    end
+
+    N2 -.->|"stage tools: survey −1"| QRY
+    N3 -.->|"stage tools: read −2, fetch −3"| QRY
+    N4 -.->|"budget base 5 + N"| QRY
+    N5 -.->|"the widest surface"| QRY
+
+    ST <--> N3
+    ST <--> N4
+    CP <--> N4
+
+    CUT -.->|"a call needing the user"| HOLD
+    FMT -.->|"validated pydantic payload"| ST
+
+    classDef state fill:#E6E6FA,stroke:#333,stroke-width:2px,color:darkblue
+    classDef node fill:#87CEEB,stroke:#333,stroke-width:2px,color:darkblue
+    classDef advers fill:#F0D58C,stroke:#8a6d1d,stroke-width:2px,color:black
+    classDef gate fill:#FFA500,stroke:#333,stroke-width:3px,color:black
+    classDef open fill:#FFB6C1,stroke:#DC143C,stroke-width:2px,color:black
+    classDef cli fill:#D8BFD8,stroke:#5c3d5c,stroke-width:2px,color:#2a1a2a
+
+    class ST,CP state
+    class N1,N2,N3 node
+    class N4 advers
+    class N5 open
+    class HOLD,CUT gate
+    class QRY,MCPS,FMT,SUB cli

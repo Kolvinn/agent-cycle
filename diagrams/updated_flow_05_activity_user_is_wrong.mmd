@@ -1,0 +1,41 @@
+flowchart TD
+    E(["🟢 Explicit instruction · depth 0<br/>authority: full"]) --> Cheap{"💰 Is the premise cheap<br/>to verify right now?"}
+
+    Cheap -->|"no · expensive or unverifiable"| Act["▶️ Proceed on the user's authority<br/>record the premise as UNVERIFIED"]
+    Cheap -->|"yes"| V{"🔎 Does the premise hold?"}
+
+    V -->|"holds"| Act
+    V -->|"contradicted by what was read"| C["🟠 CONTESTED EXPLICIT<br/>authorised, but apparently false"]
+
+    C --> Never["🚫 NEVER silently repair<br/>no quiet substitution of a near match,<br/>no 'they obviously meant...'"]
+    Never --> Prop["📝 State the contradiction in one line<br/>and propose the alternative flow"]
+
+    Prop --> R{"🙋 User responds"}
+    R -->|"reaffirms the instruction"| Act2["▶️ Proceed as instructed<br/>their call · record the override<br/>do not re-litigate"]
+    R -->|"corrects it"| New(["🟢 New explicit · SUPERSEDES the old"])
+    R -->|"no answer"| Park["🅿️ Parked · do not guess<br/>do the unblocked work meanwhile"]
+
+    subgraph K["🧭 Kinds of user error this catches"]
+        direction TB
+        K1["🎯 target does not exist<br/>named file, symbol or record is absent"]
+        K2["📊 premise about state is false<br/>'the tests pass, so ship it'"]
+        K3["🔧 approach is unworkable<br/>deprecated, incompatible, already provided"]
+        K4["🔀 contradicts an earlier explicit<br/>user said A, now says not-A"]
+    end
+    K -.-> V
+
+    classDef startEnd fill:#E6E6FA,stroke:#333,stroke-width:2px,color:darkblue
+    classDef decision fill:#FFD700,stroke:#333,stroke-width:2px,color:black
+    classDef explicit fill:#90EE90,stroke:#2E7D2E,stroke-width:2px,color:darkgreen
+    classDef contested fill:#FFA500,stroke:#8a5a00,stroke-width:3px,color:black
+    classDef forbidden fill:#8a2b2b,stroke:#5c1c1c,stroke-width:2px,color:#fff
+    classDef propose fill:#87CEEB,stroke:#00538a,stroke-width:2px,color:darkblue
+    classDef open fill:#E0E0E0,stroke:#666,stroke-width:2px,stroke-dasharray:5 3,color:black
+
+    class E,New startEnd
+    class Cheap,V,R decision
+    class Act,Act2 explicit
+    class C contested
+    class Never forbidden
+    class Prop propose
+    class Park,K1,K2,K3,K4 open

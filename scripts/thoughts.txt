@@ -1,0 +1,14 @@
+//strip formatting from c# file
+sed -E 's|\/\/.*||g' Program.cs | tr -d '\n\r' | sed -E 's/[[:space:]]+/ /g' > Program.min.cs
+
+//then process code image
+silicon Program.min.cs \
+  --output code_context.png \
+  --language csharp \
+  --theme "Visual Studio Dark" \
+  --font "Courier New" \
+  --pad-horiz 0 \
+  --pad-vert 0 \
+  --no-window-controls \
+  --no-shadow \
+  --width 1100

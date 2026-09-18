@@ -1,0 +1,47 @@
+sequenceDiagram
+    autonumber
+    actor U as 👤 User
+    participant G as 🕸️ create_agent graph
+    participant MW as 🛡️ ProvenanceLedgerMiddleware
+    participant L as 📒 Ledger state
+    participant M as 🤖 ChatClaudeCli
+    participant CLI as 🖥️ claude CLI subprocess
+    participant T as ⚙️ your @tool function
+
+    U->>G: HumanMessage
+    G->>MW: before_model
+    MW->>L: register depth-0 nodes from the verbatim words
+    MW-->>G: ledger digest injected into the prompt
+
+    G->>M: model call, tools bound
+    M->>CLI: spawn and prompt
+    Note over CLI: built-in Read / Edit / Bash run HERE,<br/>inside the subprocess. They never surface<br/>as tool_calls, so v1 cannot gate them.
+    CLI-->>M: raw response
+    M-->>G: AIMessage carrying tool_calls
+
+    loop for each tool_call
+        G->>MW: wrap_tool_call request, handler
+        MW->>L: read ledger, classify depth and severity
+
+        alt ALLOW — passive pass-through
+            MW->>T: handler request
+            T-->>MW: real result
+            MW->>L: log node, source, effective policy
+            MW-->>G: ToolMessage — genuine tool output
+        else PROPOSE — text gating
+            Note over MW,T: handler is NEVER called.<br/>Nothing executes.
+            MW->>L: log the proposal, mark it open
+            MW-->>G: ToolMessage — synthesised prose:<br/>not executed, here is the flow I intended and why
+        else ASK — human in the loop
+            MW->>U: interrupt, or surfaced question
+            U-->>MW: approve / deny / silence
+            MW->>L: promote, reject, or park
+            MW-->>G: ToolMessage carrying the verdict
+        else BLOCK
+            MW->>L: record the rejection
+            MW-->>G: ToolMessage — synthesised refusal and reason
+        end
+    end
+
+    G->>M: next model call, now including those ToolMessages
+    Note over G,M: In ALLOW the ToolMessage is real output.<br/>In PROPOSE and BLOCK it is text WE wrote.<br/>Same channel — that prose is the steering.

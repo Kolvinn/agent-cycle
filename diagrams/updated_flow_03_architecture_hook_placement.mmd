@@ -1,0 +1,44 @@
+flowchart TD
+    subgraph V1["✅ v1 SCOPE · gateable in LangChain space"]
+        direction TB
+        M["🤖 ChatClaudeCli<br/>returns tool_calls · never executes them"]
+        G["🛡️ ProvenanceLedgerMiddleware<br/>wrap_tool_call · registered OUTERMOST"]
+        L[("📒 Ledger state<br/>flat file, session-keyed")]
+        H["🙋 Ask / interrupt<br/>fires only at depth 2"]
+        T["⚙️ Tool executed by caller code"]
+    end
+
+    M --> G
+    G <-->|"read depth · write node"| L
+    G -->|"depth 0 or 1 · allow"| T
+    G -->|"depth 2 · hold"| H
+    H -->|"approved"| T
+    H -->|"denied or unanswered"| Stop(["⛔ not executed"])
+
+    G -.->|"⚠️ ORDERING TRAP · observed in prior code:<br/>wrap_tool_call runs BEFORE HITL, so dispatching<br/>here means the ask never fires"| H
+    T -.->|"⚠️ LIVENESS · prior HITL stub returned<br/>'Approved, execute operation.' with no human"| Assert{"✅ assert the gate<br/>actually ran"}
+
+    subgraph OUT["⛔ OUT OF v1 SCOPE · deferred"]
+        direction TB
+        CC["🖥️ Claude Code built-in tools<br/>Read · Edit · Bash"]
+        SUB["📦 execute inside the CLI subprocess"]
+        PT["🪝 would need a PreToolUse hook<br/>plus its own session-keyed state file"]
+        MCP["❌ an MCP server alone cannot block these<br/>it can only expose its own tools"]
+    end
+
+    CC --> SUB --> PT
+    PT -.-> MCP
+
+    classDef model fill:#87CEEB,stroke:#333,stroke-width:2px,color:darkblue
+    classDef gate fill:#FFA500,stroke:#333,stroke-width:3px,color:black
+    classDef store fill:#E6E6FA,stroke:#333,stroke-width:2px,color:darkblue
+    classDef exec fill:#90EE90,stroke:#2E7D2E,stroke-width:2px,color:darkgreen
+    classDef blocked fill:#FFB6C1,stroke:#DC143C,stroke-width:2px,color:black
+    classDef deferred fill:#E0E0E0,stroke:#666,stroke-width:2px,stroke-dasharray:5 3,color:black
+
+    class M model
+    class G,H,Assert gate
+    class L store
+    class T exec
+    class Stop,MCP blocked
+    class CC,SUB,PT deferred

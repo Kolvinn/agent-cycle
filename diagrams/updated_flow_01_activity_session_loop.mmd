@@ -1,0 +1,70 @@
+flowchart TD
+    Start(["👤 User turn arrives"]) --> Reg["📒 Register explicit nodes<br/>verbatim user words ONLY · depth 0"]
+    Reg --> Prem{"🔎 Premise check · see diagram 5<br/>does what the user asserted hold?"}
+    Prem -->|"holds, or too costly to check"| Model
+    Prem -->|"contradicted"| Contest["🟠 CONTESTED EXPLICIT<br/>authorised but apparently false<br/>never silently repaired"]
+    Contest --> Propose
+
+    Model["🤖 Model proposes tool_calls<br/>bind_tools returns them · caller code decides"]
+    Model -.->|"asserts a conclusion with NO tool call<br/>OPEN ITEM 1 · nothing to intercept"| Gap["⚠️ Ungated surface"]
+
+    Model --> Gate{{"🛡️ wrap_tool_call · registered OUTERMOST"}}
+    Gate --> Depth["📏 Resolve provenance<br/>depth 0 · 1 · 2+ · unverified authority"]
+    Depth --> Sev["⚖️ Resolve severity<br/>read · write · irreversible · outward-facing"]
+    Sev --> Policy{"🎚️ POLICY RESOLVER · see diagram 4<br/>depth × severity × live config"}
+
+    Policy -->|"allow"| Live
+    Policy -->|"propose"| Propose["📝 PROPOSE · short-circuit<br/>return the intended flow · execute nothing"]
+    Policy -->|"ask"| Ask
+    Policy -->|"block"| Drop["⛔ blocked · recorded as REJECTED"]
+
+    Ask{{"🙋 Ask the user · state the assumption plainly"}}
+    Ask -->|"approved"| Promote["🟢 promote to EXPLICIT<br/>hop chain resets · user only"]
+    Ask -->|"denied"| Drop
+    Ask -->|"no answer"| Park["🅿️ parked OPEN<br/>never self-resolves · never inferred shut"]
+
+    Propose --> Review(["⏸️ user reviews the proposed flow"])
+    Review -->|"accepted"| Promote
+    Review -->|"corrected"| Reg
+    Review -->|"no answer"| Park
+
+    Promote --> Live
+    Live{"✅ Did the gate actually run for this call?"}
+    Live -->|"no · stubbed, bypassed or ordered around"| Fail["❌ FAIL CLOSED"]
+    Live -->|"yes"| Exec["⚙️ Execute tool"]
+
+    Exec --> Tag["🏷️ Tag result with its node id<br/>anything found inside inherits depth + 1"]
+    Tag --> Count["🔢 counter += 1<br/>ledger bookkeeping exempt"]
+    Drop --> Count
+    Park --> Count
+    Fail --> Count
+
+    Count --> Check{"🔁 reconcile due?<br/>LEDGER_RECONCILE_EVERY · default 5"}
+    Check -->|"no"| Model
+    Check -->|"yes"| Rec["📒 Reconcile ledger"]
+    Rec --> Verify{"🔎 Is every implicit still traceable<br/>to the source it claims?"}
+    Verify -->|"no · label drift"| Demote["⬇️ demote and re-open"]
+    Demote --> Ask
+    Verify -->|"yes"| Done{"🏁 All explicits addressed AND<br/>all implicits closed?"}
+    Done -->|"no"| Model
+    Done -->|"yes"| End(["✅ Session complete"])
+
+    classDef startEnd fill:#E6E6FA,stroke:#333,stroke-width:2px,color:darkblue
+    classDef process fill:#87CEEB,stroke:#333,stroke-width:2px,color:darkblue
+    classDef decision fill:#FFD700,stroke:#333,stroke-width:2px,color:black
+    classDef explicit fill:#90EE90,stroke:#2E7D2E,stroke-width:2px,color:darkgreen
+    classDef implicit fill:#F0D58C,stroke:#8a6d1d,stroke-width:2px,color:black
+    classDef blocked fill:#FFB6C1,stroke:#DC143C,stroke-width:2px,color:black
+    classDef gate fill:#FFA500,stroke:#333,stroke-width:3px,color:black
+    classDef propose fill:#87CEEB,stroke:#00538a,stroke-width:3px,color:darkblue
+    classDef open fill:#E0E0E0,stroke:#666,stroke-width:2px,stroke-dasharray:5 3,color:black
+
+    class Start,End,Review startEnd
+    class Reg,Model,Depth,Sev,Exec,Tag,Count,Rec process
+    class Prem,Policy,Check,Verify,Done,Live decision
+    class Promote explicit
+    class Demote implicit
+    class Fail,Drop blocked
+    class Gate,Ask gate
+    class Contest,Propose propose
+    class Gap,Park open

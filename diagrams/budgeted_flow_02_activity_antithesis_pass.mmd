@@ -1,0 +1,52 @@
+flowchart TD
+    T1["🅰️ TURN 1 output · authored in the AFFIRMING frame"] --> PICK{"✂️ What crosses the turn boundary?"}
+
+    subgraph CROSS["✅ Crosses — re-checkable, frame-neutral"]
+        direction TB
+        C1["📒 The N assumptions, as registered"]
+        C2["📎 Finding LOCATORS · file · line · range"]
+        C3["📄 Finding EXCERPTS · verbatim<br/>rejected if they appear in no recorded tool result"]
+        C4["💰 Spend record · 'assumption 2 used 5 of 5'"]
+        C5["🅿️ Parked candidates + their reasons"]
+    end
+
+    subgraph HELD["⛔ Held back — affirming-frame artifacts"]
+        direction TB
+        H1["🧠 The reasoning transcript<br/>nothing to be loyal to"]
+        H2["😐 Confidence language<br/>'clearly', 'as expected', 'confirms'"]
+        H3["🎯 The 'answers' framing on each finding<br/>= why the THESIS thought it mattered"]
+    end
+
+    PICK -->|"projection"| C1
+    PICK -->|"stripped"| H1
+
+    C3 --> LEAK{{"⚠️ THE RESIDUAL LEAK<br/>excerpts are re-checkable, but WHICH excerpts<br/>were chosen is an affirming-frame decision.<br/>A clean context still inherits a biased SELECTION."}}
+
+    LEAK --> MIT["🛡️ This is what the N term is FOR<br/>budget = base 5 + N<br/>N ≈ one re-read AROUND each cited locator<br/>→ de-bias the inherited evidence selection<br/>base ≈ hunt the shared misreading"]
+
+    MIT --> T2["🅱️ TURN 2 · prompt container<br/>'create the antithesis of these<br/>assumptions and findings'"]
+    C1 --> T2
+    C2 --> T2
+    C4 --> T2
+    C5 --> T2
+
+    T2 --> ASYM{{"⚖️ The budgets are ASYMMETRIC by design<br/>thesis 5N · antithesis 5+N<br/>building a case is expensive,<br/>finding ONE hole is cheap"}}
+    ASYM --> RISK["❌ The failure this invites<br/>a lopsided evidence set READS as a conclusion<br/>15 points of 'for' vs 8 points of 'against'"]
+    RISK --> GUARD["🛡️ Guard · stage ⑤ states the asymmetry<br/>as part of the disposition, every time"]
+    GUARD --> OUT["🗣️ State · Evidence · Options<br/>no node closed in either direction"]
+
+    classDef node fill:#87CEEB,stroke:#333,stroke-width:2px,color:darkblue
+    classDef decision fill:#FFD700,stroke:#333,stroke-width:2px,color:black
+    classDef good fill:#90EE90,stroke:#2E7D2E,stroke-width:2px,color:darkgreen
+    classDef blocked fill:#FFB6C1,stroke:#DC143C,stroke-width:2px,color:black
+    classDef gate fill:#FFA500,stroke:#333,stroke-width:3px,color:black
+    classDef spend fill:#D8BFD8,stroke:#5c3d5c,stroke-width:2px,color:#2a1a2a
+    classDef implicit fill:#F0D58C,stroke:#8a6d1d,stroke-width:2px,color:black
+
+    class T1,T2,OUT node
+    class PICK decision
+    class C1,C2,C3,C4,C5 good
+    class H1,H2,H3 blocked
+    class LEAK,ASYM gate
+    class MIT,GUARD spend
+    class RISK blocked

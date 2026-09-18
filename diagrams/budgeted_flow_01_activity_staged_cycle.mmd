@@ -1,0 +1,98 @@
+flowchart TD
+    Start(["👤 User message · raw text · carries authority"]) --> VB
+
+    subgraph TURN1["🅰️ TURN 1 · AFFIRMING FRAME"]
+        direction TB
+
+        subgraph S1["① Prompt + fact extraction"]
+            direction TB
+            VB["📌 Register the prompt VERBATIM<br/>authority: the user · no inference"]
+            VB --> EXTR["🤖 Extraction pass · AGENT<br/>selection IS inference → no authority yet"]
+            EXTR --> HG{{"🙋 HITL on the TOOL CALL<br/>propose_fact → approve?"}}
+            HG -->|"approved"| FACT["🟢 EXPLICIT<br/>the only thing spend may serve"]
+            HG -->|"denied · silence"| NEG["🅿️ Parked WITH its reason"]
+        end
+
+        subgraph S2["② Budget context pass — go WIDE"]
+            direction TB
+            ORI["🗺️ Orient · prompt × project landscape<br/>NO graph-write tools in this stage<br/>→ it forms no claim, so it closes nothing"]
+            ORI --> SPW["💸 Spend the UNATTACHED base pool"]
+            SPW --> RDY{"🎯 Enough to name N readings?"}
+            RDY -->|"not yet"| SPW
+        end
+
+        subgraph S3["③ Assumption pass — form, then fund"]
+            direction TB
+            FORM["🧩 write_assumption × N<br/>agent-authored → NOT HITL<br/>each must be a place info can LAND"]
+            FORM --> SPD["💸 Spend ≤ 5 per assumption<br/>caps set by the graph, never by the agent"]
+            SPD --> FIND["📎 attach_finding<br/>locator + excerpt · sourced, NOT fact"]
+            FIND --> Q1{"🔢 N × 5 spent?"}
+            Q1 -->|"no"| SPD
+        end
+
+        FACT --> ORI
+        RDY -->|"yes"| FORM
+    end
+
+    Q1 -->|"yes"| CE1["✂️ TURN BOUNDARY · projection replaces transcript<br/>unspent thesis budget cannot cross<br/>→ non-transferable for free"]
+    CE1 --> NOSHOW{{"🚫 The user is NOT shown findings here<br/>reacting to them would RATIFY the frame"}}
+    NOSHOW --> CONT
+
+    subgraph TURN2["🅱️ TURN 2 · ADVERSARIAL FRAME · internal turn, no user contact"]
+        direction TB
+        CONT["📦 PROMPT CONTAINER<br/>'create the antithesis of these<br/>assumptions and findings'"]
+        CONT --> ANTI["⚔️ write_antithesis · it is a NODE<br/>no affirming transcript in context<br/>→ nothing to be loyal to"]
+        ANTI --> ADM{"🔎 Admissible?<br/>name the call that would move it"}
+        ADM -->|"no"| REAU["🔁 Re-author · 'nothing to attack'<br/>is NOT a permitted output"]
+        REAU --> ANTI
+        ADM -->|"yes"| SPA["💸 Spend base 5 + N<br/>N ≈ one re-read per assumption<br/>base ≈ the shared-misreading hunt"]
+        SPA --> FIND2["📎 Counter-findings"]
+        FIND2 --> Q2{"🔢 5 + N spent?"}
+        Q2 -->|"no"| SPA
+    end
+
+    Q2 -->|"yes"| CE2["✂️ Turn boundary · projection"]
+
+    subgraph TURN3["🅲 TURN 3 · PRESENT + RECONCILE — widest tool surface · ⚠️ EXPLORATION REQUIRED"]
+        direction TB
+        PRES["🗣️ PRESENT prompt container<br/>graph + findings + original prompt + facts<br/>→ what is there · how it relates to the ask<br/>what is missing · what is NOT known<br/>+ suggestions for moving forward"]
+        PRES --> ASYM["⚖️ State the budget asymmetry<br/>thesis 5N vs antithesis 5+N<br/>or a lopsided evidence set reads as a conclusion"]
+        ASYM --> HAND(["⏸️ Hand off · raw text to the user"])
+        HAND --> REPLY(["📨 User reply · raw text · carries authority"])
+        REPLY --> ANLZ["🤖 Analyse the reply<br/>→ emit graph-write TOOL CALLS<br/>the proposed call IS the binding, made visible"]
+        ANLZ --> TOOLS{{"🙋 HITL on the authority-changing calls<br/>promote_fact · close_node · supersede<br/>compress · discard are ⚠️ unresolved"}}
+        TOOLS --> APPLY["✂️ Apply · context edit is now<br/>an approved tool call, not an automatic step"]
+    end
+
+    CE2 --> PRES
+    APPLY --> CYCLE(["🔄 Next cycle at stage ①<br/>each cycle is a mini-session in the super-session"])
+
+    LED[("🗂️ Ledger · explicits · assumptions · antithesis · findings · spend")]
+    FACT <--> LED
+    FIND <--> LED
+    FIND2 <--> LED
+    APPLY <--> LED
+
+    classDef startEnd fill:#E6E6FA,stroke:#333,stroke-width:2px,color:darkblue
+    classDef node fill:#87CEEB,stroke:#333,stroke-width:2px,color:darkblue
+    classDef decision fill:#FFD700,stroke:#333,stroke-width:2px,color:black
+    classDef explicit fill:#90EE90,stroke:#2E7D2E,stroke-width:2px,color:darkgreen
+    classDef implicit fill:#F0D58C,stroke:#8a6d1d,stroke-width:2px,color:black
+    classDef gate fill:#FFA500,stroke:#333,stroke-width:3px,color:black
+    classDef blocked fill:#FFB6C1,stroke:#DC143C,stroke-width:2px,color:black
+    classDef spend fill:#D8BFD8,stroke:#5c3d5c,stroke-width:2px,color:#2a1a2a
+    classDef brain fill:#FFE4B5,stroke:#8a5a1d,stroke-width:3px,color:#3a2409
+    classDef explore fill:#FFF3B0,stroke:#b38f00,stroke-width:3px,stroke-dasharray:6 3,color:#3d3000
+    classDef store fill:#E6E6FA,stroke:#333,stroke-width:2px,color:darkblue
+
+    class Start,HAND,REPLY,CYCLE startEnd
+    class VB,ORI,CE1,CE2,ASYM,REAU,CONT node
+    class HG,ADM,RDY,Q1,Q2 decision
+    class FACT explicit
+    class EXTR,FORM,FIND,FIND2,ANLZ implicit
+    class HG,NOSHOW,TOOLS gate
+    class NEG blocked
+    class SPW,SPD,SPA spend
+    class ANTI brain
+    class PRES,APPLY explore
+    class LED store

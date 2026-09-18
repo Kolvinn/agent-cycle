@@ -1,0 +1,15 @@
+flowchart LR
+    E0["🟢 EXPLICIT<br/>depth 0<br/>verbatim user words"]
+    I1["🟡 IMPLICIT<br/>depth = parent + 1<br/>content = sanctioned tool's real output"]
+    E1["🟢 EXPLICIT<br/>closes I1<br/>promotion or user answer"]
+    E0n["🟢 next triad's depth 0"]
+
+    E0 -->|"① model proposes a tool_call<br/>PreToolUse / can_use_tool assigns depth 1<br/>records E0 as parent"| I1
+    I1 -->|"② turn cannot end with I1 open<br/>Stop hook blocks until resolved"| E1
+    E1 -.->|"becomes root of the next layer"| E0n
+
+    classDef explicit fill:#90EE90,stroke:#2E7D2E,stroke-width:2px,color:darkgreen
+    classDef implicit fill:#F0D58C,stroke:#8a6d1d,stroke-width:2px,color:black
+
+    class E0,E1,E0n explicit
+    class I1 implicit

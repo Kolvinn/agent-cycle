@@ -1,0 +1,20 @@
+flowchart LR
+    Def["📦 built-in defaults<br/>strictest sane setting"] --> File["📄 project config<br/>checked into the repo"]
+    File --> Env["🌱 environment variables<br/>adjustable on the go"]
+    Env --> Run["🎚️ runtime override<br/>USER-INITIATED ONLY"]
+    Run --> Eff[("⚙️ effective policy<br/>for the next call")]
+
+    Agent["🤖 the agent itself"] -->|"MAY tighten<br/>raise caution, lower max depth"| Eff
+    Agent -.->|"MUST NOT loosen<br/>one-way rule"| Blocked["⛔ refused and surfaced<br/>self-widening is the ultimate<br/>implicit self-promotion"]
+
+    Eff --> Audit[("📒 every effective value logged<br/>with the call it governed")]
+
+    classDef layer fill:#87CEEB,stroke:#333,stroke-width:2px,color:darkblue
+    classDef store fill:#E6E6FA,stroke:#333,stroke-width:2px,color:darkblue
+    classDef actor fill:#F0D58C,stroke:#8a6d1d,stroke-width:2px,color:black
+    classDef blocked fill:#8a2b2b,stroke:#5c1c1c,stroke-width:2px,color:#fff
+
+    class Def,File,Env,Run layer
+    class Eff,Audit store
+    class Agent actor
+    class Blocked blocked

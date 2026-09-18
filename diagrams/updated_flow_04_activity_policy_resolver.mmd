@@ -1,0 +1,36 @@
+flowchart TD
+    subgraph LADDER["🪜 The outcome ladder — stricter to the right. Every knob only ever pushes RIGHT."]
+        direction LR
+        A["✅ ALLOW<br/>it just runs"] --> P["📝 PROPOSE<br/>show the intended flow,<br/>execute nothing"] --> K["🙋 ASK<br/>hold for a human answer"] --> B["⛔ BLOCK<br/>refuse outright"]
+    end
+
+    Start(["⚙️ a proposed tool call"]) --> Q1["1️⃣ How far from the user's words?<br/>depth 0 · 1 · 2+"]
+    Q1 --> Q2["2️⃣ How bad if it is wrong?<br/>read · write · irreversible · outward"]
+    Q2 --> Base["3️⃣ BASE OUTCOME<br/>look the two up in the table"]
+    Base --> Mods["4️⃣ Apply modifiers<br/>each can only move RIGHT"]
+    Mods --> Final(["5️⃣ Final outcome"])
+
+    M1["🎈 float budget spent"] --> Mods
+    M2["🟠 premise contradicted"] --> Mods
+    M3["🎚️ above severity ceiling"] --> Mods
+    M4["📝 propose_only mode"] --> Mods
+
+    Obs["👁️ observe mode"] -.->|"records the outcome it WOULD<br/>have applied, then runs anyway"| Final
+
+    classDef startEnd fill:#E6E6FA,stroke:#333,stroke-width:2px,color:darkblue
+    classDef step fill:#87CEEB,stroke:#333,stroke-width:2px,color:darkblue
+    classDef allow fill:#90EE90,stroke:#2E7D2E,stroke-width:2px,color:darkgreen
+    classDef propose fill:#87CEEB,stroke:#00538a,stroke-width:3px,color:darkblue
+    classDef gate fill:#FFA500,stroke:#333,stroke-width:3px,color:black
+    classDef blocked fill:#FFB6C1,stroke:#DC143C,stroke-width:2px,color:black
+    classDef knob fill:#F0D58C,stroke:#8a6d1d,stroke-width:2px,color:black
+    classDef shadow fill:#E0E0E0,stroke:#666,stroke-width:2px,stroke-dasharray:5 3,color:black
+
+    class Start,Final startEnd
+    class Q1,Q2,Base,Mods step
+    class A allow
+    class P propose
+    class K gate
+    class B blocked
+    class M1,M2,M3,M4 knob
+    class Obs shadow

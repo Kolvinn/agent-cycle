@@ -1,0 +1,39 @@
+flowchart TD
+    Start(["📐 a phase needs a typed answer"]) --> PYD["pydantic model<br/>Payload.model_json_schema()"]
+
+    PYD --> XF{{"🔧 transform — REQUIRED<br/>three rules, measured in spike 4"}}
+
+    XF -->|"rule 1"| R1["strip 'discriminator',<br/>keep the oneOf beside it<br/>Ajv strict: unknown keyword"]
+    XF -->|"rule 2"| R2["expand 'prefixItems'<br/>→ items + minItems/maxItems<br/>draft-07 has no such keyword"]
+    XF -->|"rule 3"| R3["rewrite a bare $ref root<br/>→ a typed object root<br/>400 input_schema.type required"]
+
+    R1 --> AJV
+    R2 --> AJV
+    R3 --> AJV
+
+    AJV{{"🛡️ CLI validates<br/>Ajv 8, strict mode, draft-07<br/>'strict:!0' in the bundled binary"}}
+    AJV -->|"invalid"| DIE["💥 exit 1, before any API call<br/>message only on the child's fd 2<br/>ProcessError.stderr is a placeholder"]
+    AJV -->|"valid"| API["🌐 shipped as a TOOL input_schema<br/>tools.0.custom.input_schema"]
+
+    API --> TURN["🔄 the turn runs<br/>real tool calls happen here,<br/>each one gated and priced"]
+    TURN --> SYN["🪄 model calls 'StructuredOutput'<br/>appears in the tool-use stream<br/>NOT shown to can_use_tool"]
+
+    SYN --> RES[("📦 ResultMessage<br/>structured_output · result · usage")]
+    RES --> CHK{{"check is_error / api_error_status<br/>subtype can read 'success' while<br/>is_error is True"}}
+    CHK -->|"error"| RAISE["⛔ SDK raises ResultError<br/>not ModelUnavailable"]
+    CHK -->|"ok"| VAL["✅ schema.model_validate(structured_output)"]
+    VAL --> Done(["🗂️ into the ledger state"])
+
+    classDef startEnd fill:#E6E6FA,stroke:#333,stroke-width:2px,color:darkblue
+    classDef step fill:#87CEEB,stroke:#333,stroke-width:2px,color:darkblue
+    classDef rule fill:#90EE90,stroke:#2E7D2E,stroke-width:2px,color:darkgreen
+    classDef gate fill:#FFA500,stroke:#333,stroke-width:3px,color:black
+    classDef bad fill:#FFB6C1,stroke:#DC143C,stroke-width:2px,color:black
+    classDef store fill:#E6E6FA,stroke:#333,stroke-width:2px,color:darkblue
+
+    class Start,Done startEnd
+    class PYD,API,TURN,SYN,VAL step
+    class R1,R2,R3 rule
+    class XF,AJV,CHK gate
+    class DIE,RAISE bad
+    class RES store

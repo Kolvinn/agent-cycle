@@ -1,0 +1,98 @@
+// Dev container for a .NET Aspire stack, on rootless Docker.
+//
+// Host prerequisite (one time, not per project): rootless Docker running for
+// your user. Confirm where its socket actually is before first run —
+//
+//   docker context inspect --format '{{.Endpoints.docker.Host}}'
+//
+// and make the socket mount below match. The three candidates are:
+//   /run/user/$UID/docker.sock      <- what this host reports; mounted below
+//   ~/.docker/desktop/docker.sock   <- Docker Desktop for Linux
+//   ~/.docker/run/docker.sock       <- some rootless setups
+//
+// The mount below spells it /var/run/user/1000/... which is the same file
+// (/var/run is a symlink to /run). The source= value must have NO leading
+// space: Docker rejects the whole `docker run` with usage text rather than
+// failing gracefully, and the container simply never starts.
+//
+// The pattern to reuse for other stacks: vendor base image + all mutable state
+// (source, package caches) mounted from the host, so the image stays
+// disposable and a rebuild is never something you have to plan around.
+{
+  "name": "langchain-claude",
+
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {}
+  },
+
+  "runArgs": [
+    // On THIS host this is the real host namespace, not RootlessKit's: the
+    // rootless daemon runs with --detach-netns, so a host-network container
+    // lands in the host's own netns. Verified -- the container sees enp12s0
+    // and the host's own listening ports, a port bound inside is reachable
+    // from the host on 127.0.0.1, and a sibling container's published port is
+    // reachable from in here. That is what makes "VS Code outside, services on
+    // localhost" work with no port forwarding.
+    // This is a property of how the daemon was STARTED, not of rootless Docker
+    // in general. On a daemon without --detach-netns you get RootlessKit's
+    // namespace instead and this assumption breaks.
+    "--network=host"
+  ],
+
+  "containerEnv": {
+    "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+    "DOTNET_NOLOGO": "1",
+
+    // Aspire's DCP drives the runtime over this socket to start its resource
+    // containers. Points at the host socket bind-mounted below.
+    "DOCKER_HOST": "unix:///var/run/docker.sock"
+  },
+
+  "mounts": [
+    // The host's rootless Docker socket, presented at the conventional path.
+    // Aspire's DCP uses this to start Postgres/Redis/etc. as SIBLING
+    // containers on the host, rather than nesting a runtime inside here.
+    "source=/var/run/user/1000/docker.sock,target=/var/run/docker.sock,type=bind",
+
+    "source=aspire-home,target=/root/,type=volume",
+
+    "source=${localEnv:HOME}/.claude.json,target=/root/.claude.json,type=bind",
+
+    "source=${localEnv:HOME}/.claude,target=/root/.claude,type=bind"
+    // apt's downloaded .debs and package lists persist across rebuilds and
+    // recreates, so re-applying packages.txt is fast and mostly offline.
+    // Requires the Keep-Downloaded-Packages config set in the Dockerfile.
+    // "source=aspire-apt-cache,target=/var/cache/apt,type=volume",
+    // "source=aspire-apt-lists,target=/var/lib/apt/lists,type=volume",
+
+    // // VS Code server + its extensions survive a rebuild, so you don't sit
+    // // through extension reinstalls every time the image changes.
+    // "source=aspire-vscode-server,target=/root/.vscode-server,type=volume"
+  ], 
+
+  // Create the bind source on the host first, otherwise Docker creates it for
+  // you and you inherit the wrong ownership.
+  //"initializeCommand": "mkdir -p ${localEnv:HOME}/.nuget/packages",
+
+  "customizations": {
+    "vscode": {
+      // These run INSIDE the container, so IntelliSense, the debugger, the
+      // integrated terminal, your builds and any agent all resolve against one
+      // identical toolchain.
+      "extensions": [
+        //"ms-dotnettools.csdevkit",
+        //"ms-dotnettools.csharp"
+      ]
+    }
+  },
+
+  // The Dockerfile is mcr.microsoft.com/dotnet/sdk:10.0 -- which is Ubuntu
+  // 24.04 with SDK 10.0.401, NOT debian:trixie-slim -- with WORKDIR /root and
+  // the aspire CLI on /root/.aspire/bin. There is no vscode user to switch to.
+  //
+  // No --userns=keep-id here: that was Podman-specific. Rootless Docker already
+  // maps container root to your host UID through its own user namespace, so
+  // files written into the bind-mounted worktree land owned by you.
+  "remoteUser": "root"
+}

@@ -1,0 +1,53 @@
+flowchart TD
+    IN["🅱️ Antithesis turn exhausted<br/>N assumptions + 1 antithesis node<br/>findings · counter-findings · spend record"] --> SETTLED
+
+    subgraph SETTLED["✅ SETTLED — the two user surfaces are NOT the same thing"]
+        direction TB
+        M1["📨 A USER MESSAGE<br/>raw text · carries authority on arrival<br/>enters at stage ① and is registered verbatim<br/>it is an INPUT"]
+        M2["🙋 A USER APPROVAL<br/>permission on ONE proposed graph-write call<br/>it is a PERMISSION, not an input<br/>it adds no words to the graph"]
+        M1 -.->|"different surfaces,<br/>different consequences"| M2
+        M2 --> BIND["🎯 Why this resolves the binding problem<br/>the agent's reading of a reply must surface<br/>AS A TOOL CALL to take effect —<br/>so approving the call confirms the BINDING.<br/>No silent reinterpretation is reachable."]
+        BIND --> AVAIL["🔒 Tool availability is gated BY STAGE<br/>stage ② has no graph-write tools at all<br/>this stage has the WIDEST surface"]
+    end
+
+    SETTLED --> CONTRA
+
+    CONTRA{"⚡ STRUCTURAL test — not a judgment<br/>do counter-findings contradict<br/>something SOURCED?"}
+    CONTRA -->|"contradicts a user EXPLICIT"| PUSH["🟠 PUSHBACK fires<br/>a graph condition, not an agent opinion<br/>→ candidate answer to 'how heavily' "]
+    CONTRA -->|"thesis findings only"| LEAN["📊 Report the contention<br/>nobody is wrong yet"]
+    CONTRA -->|"nothing contradicted"| HELD["✅ 'These held. The antithesis<br/>found nothing against them.'"]
+
+    PUSH --> EXPLORE
+    LEAN --> EXPLORE
+    HELD --> EXPLORE
+
+    subgraph EXPLORE["⚠️ EXPLORATION REQUIRED — no chosen answer yet"]
+        direction TB
+        X1["❓ REPORT SHAPE<br/>flat ledger · contention-first · options-first<br/>flat lets the BUDGET pick the winner<br/>contention-first hides a missed shared frame<br/>options-first peaks the ratification hazard"]
+        X2["❓ WHICH CALLS ARE HITL<br/>authority-changing ones clearly are.<br/>Is COMPRESSION authority-changing?<br/>it decides what the next cycle can still see."]
+        X3["❓ COMPRESS vs DISCARD policy<br/>what survives as graph · what is thrown away<br/>parked reasons must survive, or the next<br/>cycle re-proposes a dead assumption"]
+        X4["❓ ONE TURN OR TWO<br/>present and ingest-the-reply are different<br/>frames — the same argument that split<br/>thesis from antithesis may apply here"]
+        X5["❓ DOES THIS STAGE HAVE A BUDGET<br/>it is a raw-text turn, but analysing a reply<br/>may need to look at things"]
+        X6["❓ THE ANTITHESIS NODE'S FATE<br/>auto-park wastes what was paid for ·<br/>persisting fragments allocation forever ·<br/>forcing an answer is friction"]
+    end
+
+    EXPLORE --> CYCLE(["🔄 Next cycle at stage ①"])
+
+    classDef node fill:#87CEEB,stroke:#333,stroke-width:2px,color:darkblue
+    classDef decision fill:#FFD700,stroke:#333,stroke-width:2px,color:black
+    classDef explicit fill:#90EE90,stroke:#2E7D2E,stroke-width:2px,color:darkgreen
+    classDef implicit fill:#F0D58C,stroke:#8a6d1d,stroke-width:2px,color:black
+    classDef gate fill:#FFA500,stroke:#333,stroke-width:3px,color:black
+    classDef contest fill:#FFD9B3,stroke:#b35c00,stroke-width:3px,color:#4a2600
+    classDef explore fill:#FFF3B0,stroke:#b38f00,stroke-width:3px,stroke-dasharray:6 3,color:#3d3000
+    classDef startEnd fill:#E6E6FA,stroke:#333,stroke-width:2px,color:darkblue
+
+    class IN node
+    class CONTRA decision
+    class PUSH contest
+    class LEAN,HELD implicit
+    class M1 explicit
+    class M2 gate
+    class BIND,AVAIL node
+    class X1,X2,X3,X4,X5,X6 explore
+    class CYCLE startEnd

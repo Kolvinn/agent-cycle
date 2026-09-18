@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+# End-to-end test harness for a Claude Code hook.
+#
+# WHY a script file (not inline Bash commands): once a PreToolUse hook is live in
+# the session, any Bash command you issue that contains the trigger token gets
+# blocked by the hook before it runs — you can't test it from your own command
+# line. Running `bash test_hook.sh` works because the OUTER command
+# ("bash test_hook.sh") doesn't contain the trigger; the triggers live inside
+# this file where the live hook never inspects them.
+#
+# USAGE:
+#   1. Copy this file next to your hook.
+#   2. Set HOOK to your hook's path.
+#   3. Fill the `run` table: trigger cases (want exit 2) + healthy-lookalike
+#      cases (want exit 0). The healthy-lookalike rows are the important ones —
+#      they prove you don't false-block (误杀健康输入比漏报更糟).
+#   4. bash test_hook.sh   # run it through bash, not ./test_hook.sh: the copy
+#      may not carry an exec bit, and `bash <file>` works regardless.
+#
+# It runs `bash -n` (syntax — a corrupted PreToolUse hook poisons the whole
+# session) then every case, and reports pass/fail.
+
+HOOK="${1:-$HOME/scripts/claude-hooks/CHANGE-ME.sh}"
+
+if [ ! -f "$HOOK" ]; then echo "HOOK not found: $HOOK" >&2; exit 1; fi
+
+echo "=== bash -n $HOOK ==="
+if bash -n "$HOOK"; then echo "OK syntax"; else echo "SYNTAX ERROR — do not register"; exit 1; fi
+echo ""
+
+pass=0; fail=0
+# run <label> <json-event> <expected-exit>
+run() {
+  printf '%s' "$2" | "$HOOK" >/dev/null 2>&1
+  local e=$?
+  if [ "$e" = "$3" ]; then printf 'PASS exit=%s [%s]\n' "$e" "$1"; pass=$((pass+1))
+  else printf 'FAIL exit=%s want=%s [%s]\n' "$e" "$3" "$1"; fail=$((fail+1)); fi
+}
+
+# says <label> <json-event> <grep-pattern> <yes|no>
+#   Asserts on the hook's stderr TEXT, not its exit code. Needed whenever the
+#   hook's real product is its guidance message — a PreToolUse explanation, a Stop
+#   reminder. Break the wording, invert an optional paragraph's condition, let a
+#   heredoc swallow a section: the exit code is unchanged and every `run` row still
+#   passes, so an exit-code-only suite is structurally blind to it (pitfall #14).
+#   Assert BOTH polarities, across two fixtures: the paragraph appears for the
+#   input it targets (want=yes), and is absent for the lookalike it must skip
+#   (want=no). A want=no row alone passes vacuously when the hook prints nothing
+#   at all — so it is only meaningful next to a want=yes row proving the hook
+#   speaks. Do not try to put both polarities on ONE fixture: a healthy input is
+#   supposed to be silent, so it has no want=yes partner — its partner is the
+#   trigger fixture.
+#   CHANNEL NOTE: `says` captures STDERR (right for blocking hooks — their
+#   contract text lives there). An exit-0 injector (PostToolUse emitting
+#   hookSpecificOutput JSON on STDOUT, Pattern D) is invisible to it — assert on
+#   stdout instead: out=$(printf '%s' "$2" | "$HOOK" 2>/dev/null).
+says() {
+  local out hit=no
+  out=$(printf '%s' "$2" | "$HOOK" 2>&1 >/dev/null) || true
+  # -F (fixed string), NOT a regex: the patterns you actually want to assert are
+  # literal phrases, and the most useful ones contain brackets — a hook that tags
+  # `path [skill]` is the motivating case. As a BRE, "[skill]" is a CHARACTER
+  # CLASS: it matches any text containing s, k, i or l, so `says … "[skill]" yes`
+  # is true of almost any English output and the row is decorative. Measured.
+  # Need a real regex? call grep -qE explicitly in a copy of this helper.
+  printf '%s' "$out" | grep -qF -- "$3" && hit=yes
+  if [ "$hit" = "$4" ]; then printf 'PASS text=%s [%s]\n' "$hit" "$1"; pass=$((pass+1))
+  else printf 'FAIL text=%s want=%s [%s]\n' "$hit" "$4" "$1"; fail=$((fail+1)); fi
+}
+
+# ── EXAMPLE TABLE — replace TRIGGER with your banned command ──────────────────
+# Trigger cases (want 2):
+run "execute"        '{"tool_name":"Bash","tool_input":{"command":"TRIGGER -x arg"}}' 2
+run "after-pipe"     '{"tool_name":"Bash","tool_input":{"command":"ls | TRIGGER -x"}}' 2
+run "no-space-pipe"  '{"tool_name":"Bash","tool_input":{"command":"ls|TRIGGER -x"}}' 2
+run "after-&&"       '{"tool_name":"Bash","tool_input":{"command":"foo && TRIGGER x"}}' 2
+run "env-prefix"     '{"tool_name":"Bash","tool_input":{"command":"FOO=1 TRIGGER x"}}' 2
+run "multiline"      '{"tool_name":"Bash","tool_input":{"command":"cd /x && ls\nTRIGGER -y"}}' 2
+run "wrapper-sudo"   '{"tool_name":"Bash","tool_input":{"command":"sudo TRIGGER -x"}}' 2
+run "wrapper-timeout" '{"tool_name":"Bash","tool_input":{"command":"timeout 5 TRIGGER -x"}}' 2
+run "abs-path"       '{"tool_name":"Bash","tool_input":{"command":"/usr/bin/TRIGGER -x"}}' 2
+run "comment-merge"  '{"tool_name":"Bash","tool_input":{"command":"echo hi # it'\''s fine\nTRIGGER -x"}}' 2
+#   ↑ wrapper/abs-path rows prove the walk is wrapper-aware (a bare-head check
+#   passes these); comment-merge proves word-start `#` comments don't open a
+#   phantom quote (`# it's` used to glue TRIGGER into echo's args → miss).
+#   ↑ the multiline row is not optional: shlex treats newlines as whitespace, so
+#   a one-stage walker collapses the block into one segment headed by `cd` and
+#   never sees TRIGGER (pitfall #11). It only passes if your hook splits into
+#   lines FIRST, shell-aware — `split_shell_lines`, which is what Pattern A and
+#   the walker section both ship. A plain text split (`cmd.split("\n")`) passes
+#   THIS row but false-blocks the `quoted-multiline` row below; run both.
+# Healthy-lookalike cases (want 0) — THESE are what prove you don't false-block:
+run "quoted-multiline" '{"tool_name":"Bash","tool_input":{"command":"echo \"line1\nTRIGGER was the culprit\nline3\""}}' 0
+#   ↑ quoted-multiline is the trap sibling of "multiline": a text-level line
+#   split fragments it and false-blocks (pitfall #11 residual); only a
+#   quote-state-aware splitter (split_shell_lines) passes it.
+run "grep-regex-arg" '{"tool_name":"Bash","tool_input":{"command":"grep -E \"a|TRIGGER|b\" file"}}' 0
+run "redirect-target" '{"tool_name":"Bash","tool_input":{"command":"echo x > TRIGGER"}}' 0
+run "sed-arg"        '{"tool_name":"Bash","tool_input":{"command":"sed s/TRIGGER/x/ file"}}' 0
+run "echo-mention"   '{"tool_name":"Bash","tool_input":{"command":"echo do not use TRIGGER"}}' 0
+run "grep-search"    '{"tool_name":"Bash","tool_input":{"command":"grep TRIGGER file"}}' 0
+run "introspect"     '{"tool_name":"Bash","tool_input":{"command":"command -v TRIGGER"}}' 0
+run "function-def"   '{"tool_name":"Bash","tool_input":{"command":"TRIGGER() { echo stub; }"}}' 0
+#   ↑ introspect row: `command -v` is a query, not an execution — a wrapper-aware
+#   walk without the introspection exception blocks it (the WORST direction).
+#   function-def row: `TRIGGER()` is a definition, not a call (measured false-block).
+run "comment"        '{"tool_name":"Bash","tool_input":{"command":"echo hi # TRIGGER bad"}}' 0
+run "unrelated"      '{"tool_name":"Bash","tool_input":{"command":"ls -la /tmp"}}' 0
+run "non-bash-tool"  '{"tool_name":"Read","tool_input":{"file_path":"/x/TRIGGER.txt"}}' 0
+#
+# ── FAILURE-DIRECTION ROWS — add these whenever the hook derives state from the
+#    command text (a path, a repo, a target). They assert the hook still behaves
+#    when it CANNOT resolve what it parsed. Omit them and a fail-open bug looks
+#    exactly like a clean pass (pitfall #10).
+#    ⚠️ These rows expect 2 because this template targets the TOKEN-MATCHER
+#    class (the banned thing is right there in the command text). A STATE-
+#    DERIVING guard (does staged state span domains?) has the OPPOSITE correct
+#    answer for `cd ~/no-such-dir && …` — the && short-circuits, nothing ever
+#    runs, allow is correct. Derive your expected exits from SKILL.md rule 5's
+#    guard-class table BEFORE writing the row, or you'll fail a correct guard.
+# run "trigger behind cd ~"  '{"tool_name":"Bash","tool_input":{"command":"cd ~/somewhere && TRIGGER -x"}}' 2
+# run "trigger behind cd abs" '{"tool_name":"Bash","tool_input":{"command":"cd /tmp && TRIGGER -x"}}' 2
+# run "unresolvable path"    '{"tool_name":"Bash","tool_input":{"command":"cd ~/no-such-dir && TRIGGER -x"}}' 2
+#
+# ── CONTENT ROWS — assert the MESSAGE, when the message is the product ────────
+# run rows prove the hook decided correctly; says rows prove it said the right
+# thing. Both polarities on conditional paragraphs (pitfall #14):
+# says "explains alternative" '{"tool_name":"Bash","tool_input":{"command":"TRIGGER x"}}' "USE INSTEAD" yes
+# says "quiet on healthy"     '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}'    "BLOCKED"     no
+#
+# ── PROVE THE SUITE CAN FAIL (mutation) — do this once per assertion you add ──
+# A green suite carries ZERO information until you have watched it go red for the
+# right reason. For each assertion, copy the hook, inject the exact bug that
+# assertion claims to catch, and confirm THAT row dies — ideally only that one:
+#     cp "$HOOK" /tmp/mutant.sh
+#     # invert a branch condition / delete a fact-check / revert to a display-string match
+#     bash test_hook.sh /tmp/mutant.sh     # expect exactly the intended row to FAIL
+# If the mutant still passes, the assertion is decorative — it is testing something
+# other than what its label claims. Two real bugs once lived in a hook through a
+# fully green 24-case suite because every row looked only at exit codes.
+#
+# ── HUMAN-GATE ROWS — if the hook releases via a confirmation dialog / tty YES,
+#    force both channels to decline so the run stays headless, and assert it
+#    BLOCKS. Requires the hook to read its channels from overridable names
+#    (see Pattern B "Make the gate testable"):
+#      GIT_GUARD_OSASCRIPT=false GIT_GUARD_TTY=/dev/null bash test_hook.sh <hook>
+#    Never provide an env var that *grants* approval — that recreates the retired
+#    static-escape-hatch anti-pattern.
+#
+# ── AFTER-REMEDIATION ROWS (mechanism 2 / receipt-shaped) — required whenever the
+#    hook DEMANDS something (rule 7).
+#    Point-in-time fixtures are structurally blind to non-termination: each `run`
+#    row asks "given this event, fire or not?", while non-termination is a property
+#    of the SEQUENCE. This pair is the only row type that can see it.
+#    A plain `run` line is NOT enough — the state the hook judges lives OUTSIDE the
+#    JSON (on the filesystem), so the rows need setup/teardown around them:
+#
+#      EVT='{"last_assistant_message":"…text that triggers the demand…"}'
+#      RECEIPT="…"                       # ← MUST be the key YOUR hook computes
+#      rm -f "$RECEIPT";  run "demands R (no receipt)"       "$EVT" 2
+#      : > "$RECEIPT";    run "quiet after R (receipt present)" "$EVT" 0
+#      rm -f "$RECEIPT"
+#
+#    ⚠️ FIRST prove your RECEIPT string is the one the hook actually computes —
+#    temporarily `echo "$RECEIPT" >&2` inside the hook, run one case, and compare.
+#    There is no universal key: rule 7's sample hook uses `git rev-parse HEAD`,
+#    a content-keyed guard hashes the reviewed text, yours may use neither. Copying
+#    a key from an example is the most likely reason row 2 fails.
+#    ONLY after the paths match does the diagnosis below apply: if row 2 STILL
+#    returns 2, the predicate is temporal rather than existence-based and it WILL
+#    loop in production (pitfall #16) — fix the predicate, not the fixture.
+#
+#    Other mechanisms need a differently-shaped pair:
+#      • mechanism 3 (blocking-cycle ceiling, never advisory delivery): no receipt
+#        to touch — feed the SAME event N+1 times
+#        and assert the last one is 0. `rm -f "$CNT"` before AND after, or a stale
+#        counter makes the whole suite pass/fail depending on run history.
+#      • mechanism 1 (PreToolUse gate): the second row isn't "receipt present", it
+#        is "the world now satisfies the demand" — same command, state fixed.
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# ── EVENT SHAPES OTHER THAN PreToolUse (the payload differs per event) ────────
+# A hook reads a DIFFERENT field depending on which event it's registered for.
+# Feed the wrong shape and the hook can't find any text, exits 0 silently, and
+# EVERY case looks like it passed. Verified shapes (2026-07-22):
+#
+#   Stop / SubagentStop — hook reads the assistant's final message:
+#     run "stop-trigger" '{"last_assistant_message":"...text under test..."}' 2
+#     (fallback path: '{"transcript_path":"/abs/path.jsonl"}' where the file has a
+#      line {"type":"assistant","message":{"content":[{"type":"text","text":"..."}]}})
+#     REQUIRED anti-loop row for every blocking Stop hook — the one field that
+#     bounds re-entry (Pattern E); the hook must exit 0 on it:
+#       run "stop_hook_active" '{"stop_hook_active":true,"last_assistant_message":"...trigger text..."}' 0
+#     And if the guard can find MULTIPLE violations in one reply: a
+#     two-violations row asserting BOTH appear in stderr — the blocked retry
+#     round passes unreported findings permanently (pitfall #17). Use two
+#     clearly distinct tokens (TRIGGER2 CONTAINS "TRIGGER" — a substring-style
+#     detector would make this row pass for the wrong reason):
+#       says "reports all hits" '{"last_assistant_message":"TRIGGER and SECONDHIT"}' "SECONDHIT" yes
+#
+#   UserPromptSubmit — hook reads the user's prompt:
+#     run "prompt-trigger" '{"prompt":"...text under test..."}' 2
+#
+#   PostToolUse — same as PreToolUse plus the result:
+#     run "post" '{"tool_name":"Bash","tool_input":{"command":"x"},"tool_response":{...}}' 2
+#
+# Build the JSON with single quotes as above. Writing '{\"a\":1}' inside single
+# quotes emits LITERAL backslash-quote — invalid JSON — and the hook exits 0 on
+# the parse failure, which reads as "passed". (Cost a real debugging round.)
+# ──────────────────────────────────────────────────────────────────────────────
+
+echo ""
+echo "=== $pass pass / $fail fail ==="
+# Harness-sanity check: if NOTHING triggered, suspect the harness before the hook.
+# A wrong event shape / malformed JSON makes the hook exit 0 on every case, which
+# is indistinguishable from "no false blocks" unless you assert a known-good
+# trigger. That's why the trigger rows above are the baseline, not decoration.
+if [ "$fail" != "0" ]; then
+  echo "FAILURES — fix before registering"
+  echo "HINT: if EVERY trigger row failed with exit=0, the hook probably never"
+  echo "      saw your text — check the event shape / JSON quoting above before"
+  echo "      touching the hook's logic."
+  exit 1
+fi
+echo "ALL PASS — safe to register"; exit 0
