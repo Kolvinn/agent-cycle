@@ -25,7 +25,7 @@ so, verbatim:
 > pick defaults but make sure to not that they are not set."
 
 So the loop runs on defaults, and :data:`PROVISIONAL` names every field whose
-value is a placeholder chosen to let it run. :data:`SETTLED` names the three
+value is a placeholder chosen to let it run. :data:`SETTLED` names the two
 that are not. Nothing distinguishes the two at run time except that list, which
 is why the list is machine-readable rather than a comment: the settings layer
 needs to be able to show which numbers are yours and which are filler.
@@ -42,7 +42,14 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Mapping
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle only matters to type checkers
-    from .harness import StageHarness
+    from .harness import Approver, StageHarness
+
+
+def _nobody():
+    """The refusing approver. Imported late, because `harness` imports this file."""
+    from .harness import NobodyApproves
+
+    return NobodyApproves()
 
 #: Prices per class of call, in the user's own example values: *"Read tools
 #: might be -2, survey skills might mb -1 (like ls, tree, etc.), webfetch = 3,
@@ -67,7 +74,7 @@ UNKNOWN_CALL_PRICE = 3
 class Budgets:
     """Every cap in the cycle, in one place, owned by the graph.
 
-    Read :data:`PROVISIONAL` before treating any of these as meaningful. Three
+    Read :data:`PROVISIONAL` before treating any of these as meaningful. Two
     are the user's; the rest are placeholders that exist so a base loop can run
     end to end, which is the stated priority: *"I'd like to see a working base
     loop before extending the finer details."*
@@ -90,35 +97,59 @@ class Budgets:
     #: *"the budget has the base (5) + assumption N (3) = 8"*.
     antithesis_base: int = 5
 
-    #: **No budget.** The user's answer, verbatim: *"delay for now, but no this
-    #: is just a analyze and report stage at the moment."* Zero is not a
-    #: placeholder here — it is the answer, and the nodes enforce it by opening
-    #: no pool at all, so the gate refuses any priced call rather than trusting
-    #: a prompt to say "don't look things up". "At the moment" is the user's
-    #: word, so expect this to be revisited; it is not permanent.
-    present_pool: int = 0
-
     # --- placeholders, so the loop runs ----------------------------------
 
-    #: The wide orientation pass, which spends from a pool tied to no
-    #: assumption because none exist yet. Never assigned a value by the design.
+    #: Points for the synthesis conversation, for one cycle.
+    #:
+    #: **This was zero, on your answer, and your later instruction supersedes
+    #: it.** The zero was right for the stage as it then was: *"delay for now,
+    #: but no this is just a analyze and report stage at the moment."* It is no
+    #: longer that stage. It is a conversation you are in, it carries evidence
+    #: calls because you may ask it to go and look, and a frame that can look
+    #: needs a pool or the restriction does not exist for it.
+    #:
+    #: One pool for the whole conversation, not one per exchange. So looking is
+    #: bounded while talking is not: when it runs dry the agent can still argue,
+    #: still propose alterations and still finish the package — it just cannot
+    #: buy any more evidence, and going round the cycle is what opens a fresh
+    #: one. ⚠️ Whether a lookup *you asked for* should cost the agent anything is
+    #: a real question and is not answered here.
+    synthesis_points: int = 5
+
+    #: Points for the wide orientation pass, which spends from a pool tied to
+    #: no reading because none exist yet. **Points, not a pool** — a pool is an
+    #: identity and lives in `budget.py`, a cap is a number and lives here; the
+    #: two used to share a name and that is a confusion worth one rename.
+    #: Never assigned a value by the design.
     #: Set equal to :attr:`antithesis_base` only because a number was needed —
     #: whether the two are genuinely the same constant is an open question, and
     #: this default must not be read as having answered it.
-    orientation_pool: int = 5
+    orientation_points: int = 5
 
-    #: The fact-extraction pass. Explicitly parked: *"I think we can put this to
-    #: the side for now. The fact extraction has more nuance at the moment than
-    #: i anticipated."* A small number so the stage can run; the stage's design
-    #: is deferred, not just its price.
-    extraction_pool: int = 3
-
-    #: Ceiling on how many assumptions may be formed. There has to be one:
-    #: the turn is funded at five times this count and the next at base plus
-    #: this count, so an agent choosing it freely would be choosing its own
-    #: budget — which the "agent never sets its own values" rule forbids. Three
-    #: is the count from the user's worked example, used as a ceiling rather
-    #: than a target.
+    #: Ceiling on how many assumptions may be formed.
+    #:
+    #: **The limit is required, by the user's own instruction:** *"there should
+    #: be a limit on the amount of assumptions produced."* So this is the one
+    #: budget field whose *existence* is settled while its *value* is not — it
+    #: appears in both :data:`REQUIRED` and :data:`PROVISIONAL`, and the two say
+    #: different things. A run may report that nobody chose the number. It may
+    #: not run without a ceiling.
+    #:
+    #: Why the ceiling cannot belong to the agent: the assume frame is funded at
+    #: the per-reading rate times this count, and the rival at base plus this
+    #: count. An agent free to choose the count would be choosing its own budget,
+    #: which the "agent never sets its own values" rule forbids.
+    #:
+    #: **Enforced by the shape of the first frame's answer, not by a tool.** A
+    #: count is a property of the whole set: a per-call refusal could stop a
+    #: fourth reading but could never produce a second, and "too few" is the
+    #: failure that matters more. So the readings come back on the answer, an
+    #: answer outside the range is a retry, and :attr:`max_reauthor_attempts`
+    #: bounds the retrying. The model is told the number, as a fact it needs to
+    #: plan against — and nothing more, because the retry is the enforcer.
+    #:
+    #: Three is the count from the user's worked example, used as a ceiling
+    #: rather than a target. It is a placeholder.
     max_assumptions: int = 3
 
     #: How many times the agent may re-author an inadmissible assumption, or an
@@ -176,8 +207,8 @@ class Budgets:
 #: is data rather than a docstring.
 PROVISIONAL: frozenset[str] = frozenset(
     {
-        "orientation_pool",
-        "extraction_pool",
+        "orientation_points",
+        "synthesis_points",
         "max_assumptions",
         "max_reauthor_attempts",
         "graph_write_price",
@@ -187,7 +218,15 @@ PROVISIONAL: frozenset[str] = frozenset(
 
 #: Fields the user set, and the only ones any run should be trusted to have
 #: right without tuning.
-SETTLED: frozenset[str] = frozenset({"per_assumption", "antithesis_base", "present_pool"})
+SETTLED: frozenset[str] = frozenset({"per_assumption", "antithesis_base"})
+
+#: Fields the user has ruled must *exist*, whatever their value. This overlaps
+#: :data:`PROVISIONAL` on purpose: *"there should be a limit on the amount of
+#: assumptions produced"* settles that there is a ceiling without settling what
+#: it is. A run may disclose that the number is untested; it may not drop the
+#: limit because the number is untested, and a settings file may not set it to
+#: nothing.
+REQUIRED: frozenset[str] = frozenset({"max_assumptions"})
 
 
 def provisional_fields(budgets: Budgets) -> dict[str, Any]:
@@ -222,6 +261,16 @@ class ControlContext:
     #: The inner Agent SDK boundary. One harness, opened per node.
     harness: StageHarness
 
+    #: Who answers a gated call, at the moment it is made. Lives here for the
+    #: same two reasons the harness does: the driver owns it, and a live
+    #: connection to a human is no more serialisable than a live connection to a
+    #: model. The graph never checkpoints either.
+    #:
+    #: :class:`~.harness.NobodyApproves` is the default, and it refuses
+    #: everything. A default that said yes would be a human-in-the-loop with no
+    #: human in it, which this repository has shipped once before and caught.
+    approver: "Approver" = field(default_factory=lambda: _nobody())
+
     budgets: Budgets = field(default_factory=Budgets)
     prices: Mapping[str, int] = DEFAULT_PRICES
 
@@ -231,12 +280,6 @@ class ControlContext:
     #: model client.
     model: str = "claude-haiku-4-5-20251001"
 
-    #: An internal turn exhausts its budget, the graph refreshes it, and the
-    #: next stage runs — with no user contact. A user turn presents. The
-    #: adversarial turn is internal, because showing the affirming findings
-    #: before anything has challenged them invites a reaction that ratifies the
-    #: frame. Kept as a flag so the distinction is switchable rather than baked.
-    internal_turns: frozenset[int] = frozenset({2})
 
 
 class BudgetNotSet(RuntimeError):

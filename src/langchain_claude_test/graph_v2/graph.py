@@ -1,272 +1,258 @@
-"""The topology — five stages, three turns, one cycle.
+"""The control graph: four frames, one state, and a pointer you control.
 
-The whole of the control design is in :func:`build`. Reading the edge list is
-reading the flow, and a change to the flow is a change to the edge list rather
-than to a runner's control statements. That is the difference the framework
-buys: `session/runner.py` states its order in a docstring, and here the order
-*is* the object.
+Each frame is a *stance* the model is put into, with its own prompt around it
+and its own answer expected back. Anything that is not a reframing is not a
+frame: it is a tool call made inside one, or arithmetic on the edge between two.
 
-**Turn boundaries are nodes, not separate graphs.** One graph per cycle, with
-``turn_1_close``/``turn_2_close`` as ordinary nodes, for two reasons. The
-checkpoint history is then a single sequence — which is what makes a fork at a
-chosen point mean "the same run, an edited context" rather than "a different
-run". And the state that crosses a boundary is an object a node *built*, which
-is checkpointed evidence of what crossed, where a subgraph's input would be a
-transient computation.
+    ┌─► orientate ──► assume ──► antithesis ──► synthesis ──► (end of run)
+    │                   │                           │
+    │                   └─ while open readings {    └─ you are here until you
+    │                        while budget { tools } }   say otherwise
+    │                                                   │
+    └───────────────── your advance command ────────────┘
 
-**Nothing is gated with ``interrupt_before``.** Every pause in this design is a
-node calling ``interrupt()`` itself, because the pause carries a payload: which
-call is being approved, and why. ``interrupt_before`` stops *before* a node and
-so has nothing to say. It would collapse the difference between a user message
-and a user approval of a tool call, turning the second back into "a pause at a
-step" — and that difference is what the design is built on.
+**The entry is conditional, and that is the cycle pointer.** Every message you
+send is its own run. While the pointer reads ``synthesis`` the run re-enters the
+conversation; when you set ``advance`` it re-enters at the top with the whole of
+the state carried. So going round is your command, not the model deciding it is
+finished and not a budget running out.
 
-**Routing is by conditional edge, never by ``Command(goto=)``.** A ``Command``
-adds a dynamic edge without removing the static one, so a node with both
-executes both destinations. Keeping every branch in the edge list also keeps it
-visible in :func:`render`, which is the point of having a topology at all.
+**Nothing in this design pauses.** There is no ``interrupt()`` anywhere, and the
+approval that used to need one is answered inside the live turn by the harness
+instead. Two things follow. The model's conversation stays open across your
+answer, so it can react to what you said rather than being restarted with it —
+which is what makes the last stage a conversation at all. And every exchange is
+a complete run that commits and ends, so the conversation is checkpointed
+message by message and therefore forkable: you can go back three replies and
+take it a different way.
 
-Conditional-edge functions receive the runtime context — verified against
-LangGraph 1.2.11 rather than assumed — so a router can read a cap it must not
-be able to change.
+**One state, and every node takes it whole.** Nodes are ``node(state: Cycle)``.
+Each frame lives in its own module under ``nodes/``, self-contained: its prompt
+container, the tools it carries and the pool it spends from all sit beside it.
+This file holds only the topology, so reading the edge list is reading the flow.
+
+There is no per-node projection. An earlier design filtered what a frame could
+see through a declared sub-schema, and the guarantee was weaker than it looked:
+a sub-schema naming a channel the state does not have silently receives an empty
+default rather than failing. **What a frame must not read is a rule in its body,
+stated where the reading happens.**
+
+**The cycle boundary is a compaction.** Inside a cycle every frame continues one
+conversation, so no prompt re-renders what the model already has. Across the
+boundary the conversation is thrown away and the *graph* is injected in its
+place, carrying the evidence that was registered onto its nodes and dropping the
+tool output that was only scaffolding. That is the one place state becomes text,
+and `package.py` is where it happens.
+
+**Two kinds of call, and neither of them waits.** Evidence calls — read, survey,
+webfetch — execute immediately and their output returns to the model inside the
+turn, or it is not doing research. The authority-bearing calls execute
+immediately too, once you have answered them, and you answer them at the moment
+they are made. Nothing is gathered for later: an earlier shape queued them and
+resolved them after the model had finished, which was a way around pausing
+mid-turn, and the pause was the problem.
+
+⚠️ **Skeleton.** The topology and the contracts are the architecture. The
+harness that answers a frame's request is not built, and neither are the payload
+models — see :data:`STAGE_WORK`.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import ast
+from pathlib import Path
+from typing import Literal
 
 from langgraph.graph import END, START, StateGraph
 
-from . import nodes
 from .context import ControlContext
+from .nodes import antithesis, assume, orientate, synthesis
 from .state import RECORD_TYPES, Cycle, unlisted_record_types
-from .views import (
-    AntithesisView,
-    ApprovalView,
-    CounterView,
-    ExtractView,
-    FormView,
-    InvestigateView,
-    OrientView,
-    PresentView,
-    PromptView,
-    ReplyView,
-    WriteApprovalView,
-)
 
-if TYPE_CHECKING:  # pragma: no cover
-    from langgraph.checkpoint.base import BaseCheckpointSaver
-    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
-    from langgraph.graph.state import CompiledStateGraph
+ORIENTATE = orientate.NAME
+ASSUME = assume.NAME
+ANTITHESIS = antithesis.NAME
+SYNTHESIS = synthesis.NAME
 
-# Node names. Kept as constants because they appear in three places — the node
-# registration, the edge list and the routers' return types — and a typo in the
-# third is a run-time error rather than an import-time one.
-REGISTER = "register"
-EXTRACT = "extract"
-APPROVE_FACTS = "approve_facts"
-ORIENT = "orient"
-FORM = "form"
-FUND = "fund"
-INVESTIGATE = "investigate"
-TURN_1_CLOSE = "turn_1_close"
-ANTITHESIS = "antithesis"
-COUNTER = "counter"
-TURN_2_CLOSE = "turn_2_close"
-PRESENT = "present"
-AWAIT_REPLY = "await_reply"
-READ_REPLY = "read_reply"
-APPROVE_WRITES = "approve_writes"
-APPLY = "apply"
-ESCALATE = "escalate"
-
-#: Nodes that pause for a human. Each one calls ``interrupt()`` with the call it
-#: wants approved. None of them spends, and none of them writes above the wait —
-#: that separation is the interrupt-replay rule, enforced by which nodes exist.
-PAUSING = frozenset({APPROVE_FACTS, AWAIT_REPLY, APPROVE_WRITES, ESCALATE})
-
-#: Nodes that open a priced harness turn. Disjoint from :data:`PAUSING`, and the
-#: disjointness is the invariant — see :func:`check_topology`.
-PRICED = frozenset({EXTRACT, ORIENT, INVESTIGATE, COUNTER, PRESENT, READ_REPLY})
+#: Every frame draws from a pool. The last one joined them when it gained
+#: evidence calls: *"yes it should get evidence tools"*. A frame that can look
+#: and has no pool has no restriction, which is the one thing this design is
+#: about.
+SPENDING = frozenset({ORIENTATE, ASSUME, ANTITHESIS, SYNTHESIS})
 
 
-def build() -> StateGraph[Cycle, ControlContext, Cycle, Cycle]:
-    """The uncompiled cycle. Separate from :func:`compile_cycle` so a caller can
-    inspect or extend the topology before committing to a checkpointer."""
+def entry(state: Cycle) -> Literal["orientate", "synthesis"]:
+    """The cycle pointer. Which frame this run enters at.
+
+    The whole of the control you have over the loop, in four lines. While the
+    last frame is where the state was left, your messages go to it; your command
+    sends the next one to the top instead, and everything the conversation built
+    goes with it.
+
+    Reads the pointer rather than a message count or a turn number, so it cannot
+    drift out of step with where the state actually is.
+    """
+    if state.stage == SYNTHESIS and not state.advance:
+        return SYNTHESIS
+    return ORIENTATE
+
+
+def build() -> StateGraph:
+    """The uncompiled cycle. Four frames, one conditional entry, one exit.
+
+    **The loop over readings is not in this file, and the loop over the
+    conversation is not an edge at all.** Cycling over the readings is two edges
+    inside the assume stage, because there are two loop conditions and they are
+    different questions. Cycling the whole graph is you invoking it again, which
+    is why the only thing here is where a run starts.
+
+    Routing is by conditional edge, never by ``Command(goto=)``: a ``Command``
+    adds a dynamic edge without removing the static one, so a node with both runs
+    both destinations.
+
+    Nothing is gated with ``interrupt_before`` and nothing calls ``interrupt()``.
+    Approval happens at the call, inside the turn, where the model can hear the
+    answer.
+    """
     builder: StateGraph = StateGraph(Cycle, context_schema=ControlContext)
 
-    # --- turn 1 · stage ① — prompt + fact extraction ----------------------
-    builder.add_node(REGISTER, nodes.register_prompt, input_schema=PromptView)
-    builder.add_node(EXTRACT, nodes.extract_facts, input_schema=ExtractView)
-    builder.add_node(APPROVE_FACTS, nodes.approve_facts, input_schema=ApprovalView)
+    builder.add_node(ORIENTATE, orientate.orientate)
+    # One node from out here; two nodes and two loops on the inside. The inner
+    # graph is *invoked by* this node rather than attached as one — a compiled
+    # subgraph attached with ``add_node`` returns its whole state, so the parent
+    # re-applies its reducers to everything already there and every accumulating
+    # channel doubles. See :func:`nodes.assume.assume`.
+    builder.add_node(ASSUME, assume.assume)
+    builder.add_node(ANTITHESIS, antithesis.antithesis)
+    builder.add_node(SYNTHESIS, synthesis.synthesis)
 
-    # --- turn 1 · stage ② — budget context pass ---------------------------
-    builder.add_node(ORIENT, nodes.orient, input_schema=OrientView)
-
-    # --- turn 1 · stage ③ — assumption pass -------------------------------
-    builder.add_node(FORM, nodes.form_assumptions, input_schema=FormView)
-    # No view: funding is the graph setting values, and it needs the whole
-    # assumption list to set them. It reads nothing the agent authored beyond
-    # the ids.
-    builder.add_node(FUND, nodes.fund_assumptions)
-    builder.add_node(INVESTIGATE, nodes.investigate, input_schema=InvestigateView)
-
-    # --- the turn boundary ------------------------------------------------
-    # Deliberately no view. Assembling a projection is the one job that
-    # requires seeing what is being left out.
-    builder.add_node(TURN_1_CLOSE, nodes.turn_1_close)
-
-    # --- turn 2 · stage ④ — antithesis pass · internal --------------------
-    # The two views below are where the design's central claim stops being an
-    # instruction: neither names `thesis_reasoning` or `findings`, so the
-    # affirming frame is not an attribute of anything these nodes hold.
-    builder.add_node(ANTITHESIS, nodes.antithesis, input_schema=AntithesisView)
-    builder.add_node(COUNTER, nodes.counter_investigate, input_schema=CounterView)
-    builder.add_node(TURN_2_CLOSE, nodes.turn_2_close)
-
-    # --- turn 3 · stage ⑤ — present + reconcile · exploration required ----
-    builder.add_node(PRESENT, nodes.present, input_schema=PresentView)
-    builder.add_node(AWAIT_REPLY, nodes.await_reply)
-    builder.add_node(READ_REPLY, nodes.read_reply, input_schema=ReplyView)
-    builder.add_node(APPROVE_WRITES, nodes.approve_writes, input_schema=WriteApprovalView)
-    builder.add_node(APPLY, nodes.apply_writes)
-
-    builder.add_node(ESCALATE, nodes.escalate)
-
-    # --- edges ------------------------------------------------------------
-    builder.add_edge(START, REGISTER)
-    builder.add_edge(REGISTER, EXTRACT)
-    builder.add_edge(EXTRACT, APPROVE_FACTS)
-    builder.add_edge(APPROVE_FACTS, ORIENT)
-
-    # Stage ② loops on itself: another orientation turn while the agent cannot
-    # name the readings and the pool still has points. Two exits, and both are
-    # needed — the agent being ready is the intended one, the pool running dry
-    # is what keeps it finite when it never is.
-    builder.add_conditional_edges(ORIENT, nodes.orient_ready, [ORIENT, FORM])
-
-    # Admissibility is enforced at formation: *"we want assumptions to be
-    # avenues available for information to stick. There is no point in assuming
-    # something unprovable."* A reading nothing could land on is re-authored,
-    # not funded — and so is a set that exceeds the graph-owned ceiling on how
-    # many readings may exist.
-    builder.add_conditional_edges(FORM, nodes.admissible_route, [FORM, FUND, ESCALATE])
-
-    builder.add_edge(FUND, INVESTIGATE)
-    builder.add_edge(INVESTIGATE, TURN_1_CLOSE)
-    builder.add_edge(TURN_1_CLOSE, ANTITHESIS)
-
-    # "There is nothing to attack" is not a permitted output, so an empty or
-    # unmovable antithesis routes back to authoring.
-    builder.add_conditional_edges(
-        ANTITHESIS, nodes.antithesis_route, [ANTITHESIS, COUNTER, ESCALATE]
-    )
-
-    builder.add_edge(COUNTER, TURN_2_CLOSE)
-    builder.add_edge(TURN_2_CLOSE, PRESENT)
-    builder.add_edge(PRESENT, AWAIT_REPLY)
-    builder.add_edge(AWAIT_REPLY, READ_REPLY)
-    builder.add_edge(READ_REPLY, APPROVE_WRITES)
-    builder.add_edge(APPROVE_WRITES, APPLY)
-
-    # The next cycle re-enters at REGISTER, never at START — START is entry-only.
-    # Whether it re-enters at all is undecided: where a new user message enters
-    # the flow is unplaced, so `next_cycle` currently ends.
-    builder.add_conditional_edges(APPLY, nodes.next_cycle, [REGISTER, END])
-
-    # Where an escalation rejoins the flow is undecided. Ending is the only
-    # answer that decides nothing.
-    builder.add_edge(ESCALATE, END)
+    builder.add_conditional_edges(START, entry, [ORIENTATE, SYNTHESIS])
+    builder.add_edge(ORIENTATE, ASSUME)
+    builder.add_edge(ASSUME, ANTITHESIS)
+    builder.add_edge(ANTITHESIS, SYNTHESIS)
+    builder.add_edge(SYNTHESIS, END)
 
     return builder
 
 
-def serializer() -> "JsonPlusSerializer":
-    """A serialiser that admits exactly this package's record types.
+def serializer():
+    """A serialiser admitting exactly this package's record types.
 
-    Pass it to whichever checkpointer a run uses::
-
-        InMemorySaver(serde=serializer())
-
-    Without it LangGraph warns once per unregistered type — *"This will be
-    blocked in a future version"* — and under ``LANGGRAPH_STRICT_MSGPACK=true``
-    it refuses to load the checkpoint at all. Measured both ways: the warnings
-    fire for :data:`~.state.RECORD_TYPES`, and a strict-mode round-trip of a
-    populated :class:`~.state.Cycle` succeeds once they are allow-listed.
-
-    This is the concrete form of the open item framework-fit §10 records as
-    unverified. What is now measured is the *serialisation*; what remains
-    unverified is a durable store behind it — this design pauses for a human
-    between turns, so it will need one that outlives the process.
+    Without it LangGraph warns once per unregistered type — *"this will be blocked
+    in a future version"* — and under strict mode refuses to load the checkpoint
+    at all. Measured both ways.
     """
     from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
     return JsonPlusSerializer(allowed_msgpack_modules=RECORD_TYPES)
 
 
-def compile_cycle(checkpointer: "BaseCheckpointSaver | None" = None) -> "CompiledStateGraph":
-    """Compile the cycle.
+def compile_cycle(checkpointer=None):
+    """Compile.
 
-    A checkpointer is not optional in practice: every pause in this design is an
-    ``interrupt()``, and an interrupt without a checkpointer cannot resume. The
-    parameter allows ``None`` only so the topology can be compiled for rendering
-    and inspection without standing up storage — and a caller that passes one
-    should build it with :func:`serializer`.
+    A checkpointer is not optional in practice, and for a different reason than
+    it used to be: nothing pauses any more, but every message is its own run, so
+    without one the conversation has no memory of the message before it. ``None``
+    is allowed only so the topology can be rendered without standing up storage.
     """
     return build().compile(checkpointer=checkpointer)
+
+
+def _calls_interrupt(module) -> bool:
+    """Whether a frame's module calls ``interrupt()`` anywhere."""
+    tree = ast.parse(Path(module.__file__).read_text())
+    return any(
+        isinstance(n, ast.Call) and getattr(n.func, "id", "") == "interrupt"
+        for n in ast.walk(tree)
+    )
 
 
 def check_topology() -> dict[str, tuple[str, ...]]:
     """The structural invariants, as a callable rather than a comment.
 
-    Empty is the only correct answer. A test should call this; it lives here so
-    the invariants travel with the topology they constrain.
+    Empty is the only correct answer.
 
-    1. **No node both spends and pauses.** The body above an ``interrupt()``
-       re-runs on resume while the state update commits once, so a node that
-       did both would re-spend on every resume.
-    2. **Every view names only real state fields.** LangGraph fills a view from
-       the state's channels by name, so a stray field is a run-time error.
-    3. **Every record type is on the checkpoint allowlist.** A record that is
-       reachable from the state but unlisted checkpoints fine and fails to
-       *load*, which is the worst possible moment to discover it.
-    4. **Every node is reachable and every edge target exists.** Compiling
-       catches the second; the first needs asking.
+    1. **No frame pauses.** This replaces the old rule that no frame both spent
+       and paused, which is now vacuous because none of them pause: approval is
+       answered at the call. The old rule existed because the body above a pause
+       re-runs on resume while the update commits once, so a frame doing both
+       would re-spend every time you answered. Every frame now spends, so if a
+       pause ever came back the rule would be violated everywhere at once — which
+       is why this checks for the pause rather than for the overlap.
+    2. **Every frame in the tool table is a node, and every node is in it.**
+    3. **The entry router names only real frames.**
+    4. **Every record type is on the checkpoint allowlist.** One reachable from
+       the state but unlisted checkpoints fine and fails to *load*.
+    5. **Every node is reachable.**
     """
-    from .views import fields_not_in_cycle
+    from .surface import STAGE_TOOLS
 
     problems: dict[str, tuple[str, ...]] = {}
+    names = {ORIENTATE, ASSUME, ANTITHESIS, SYNTHESIS}
 
-    both = PRICED & PAUSING
-    if both:
-        problems["nodes that both spend and pause"] = tuple(sorted(both))
+    pausing = tuple(
+        sorted(m.NAME for m in (orientate, assume, antithesis, synthesis) if _calls_interrupt(m))
+    )
+    if pausing:
+        problems["frames that pause"] = pausing
+
+    mismatch = names ^ set(STAGE_TOOLS)
+    if mismatch:
+        problems["frames missing from the tool table, or the other way round"] = tuple(
+            sorted(mismatch)
+        )
+
+    routes = set(entry.__annotations__["return"].__args__) if hasattr(
+        entry.__annotations__["return"], "__args__"
+    ) else set(Literal[ORIENTATE, SYNTHESIS].__args__)
+    unknown = routes - names
+    if unknown:
+        problems["entry router names a frame that does not exist"] = tuple(sorted(unknown))
 
     unlisted = unlisted_record_types()
     if unlisted:
         problems["record types missing from the checkpoint allowlist"] = unlisted
 
-    bad_views = fields_not_in_cycle()
-    if bad_views:
-        problems["views naming unknown state fields"] = tuple(
-            f"{view}: {', '.join(fields)}" for view, fields in sorted(bad_views.items())
-        )
-
-    compiled = compile_cycle()
-    drawn = compiled.get_graph()
+    drawn = compile_cycle().get_graph()
     reachable = {e.target for e in drawn.edges} | {START}
-    declared = set(drawn.nodes) - {START, END, "__start__", "__end__"}
-    orphans = declared - reachable
+    orphans = (set(drawn.nodes) - {START, END, "__start__", "__end__"}) - reachable
     if orphans:
         problems["unreachable nodes"] = tuple(sorted(orphans))
 
     return problems
 
 
-def render() -> str:
+def render(*, inner: bool = False) -> str:
     """The topology as mermaid, drawn from the compiled graph itself.
 
-    Not a hand-maintained diagram: if the edge list changes, this changes with
-    it. Used to keep `diagrams/` honest rather than to replace the design
-    diagrams, which say things a topology cannot.
+    ``inner`` appends the assume stage's own two-node loop, which the outer view
+    shows as a single box. It is drawn separately rather than through ``xray``,
+    which only expands a subgraph *attached* as a node — and this one is invoked
+    from inside its node instead, for the reason :func:`build` gives.
     """
-    return compile_cycle().get_graph().draw_mermaid()
+    drawn = compile_cycle().get_graph().draw_mermaid()
+    if not inner:
+        return drawn
+    return drawn + "\n%% inside " + ASSUME + "\n" + assume.subgraph().get_graph().draw_mermaid()
+
+
+#: What is still unbuilt, listed where the code is rather than in a note
+#: somewhere.
+#:
+#: **The harness.** Nothing opens a subprocess yet: :class:`~.harness.UnbuiltHarness`
+#: refuses instead of pretending. Four things wait on it — routing a concrete
+#: tool name to a price class, transforming a pydantic schema into one the CLI's
+#: validator accepts, returning the records its calls created, and holding one
+#: conversation open across frames *and across runs*, which is what every
+#: ``continues=True`` rides on and is a harder ask than it was: the synthesis
+#: conversation spans separate invocations of the graph.
+#:
+#: **The payload schemas.** Each frame declares the shape of the answer it
+#: expects, in prose and with a body of ``...``. What they must contain is
+#: settled; the models are not written.
+#:
+#: **Applying an approved alteration.** The store has no mutation layer, so an
+#: approved ``compress`` or ``discard`` is recorded and not carried out — which
+#: means the package grows rather than compacting. That is the wrong end of the
+#: failure to be on, but it is the safe one.
+STAGE_WORK = "see the module docstring — the harness is the next thing to build"

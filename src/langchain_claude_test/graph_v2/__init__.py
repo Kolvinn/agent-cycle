@@ -2,12 +2,9 @@
 
 The design this implements is `docs/design/budgeted-flow-2026-09-17.md`; the
 reason it is built on LangGraph rather than on Pydantic AI is
-`docs/design/framework-fit-2026-09-18.md`. Neither is restated here, but every
-module carries the register marks — **E** explicit, **O** observed, **A**
-assumption, **X** exploration required — so a reader can tell what is the
-user's decision, what was read out of this repository, and what is still open.
-Two new questions were raised by writing this down; they are marked **Q** and
-listed in `README.md`.
+`docs/design/framework-fit-2026-09-18.md`. Neither is needed to read the code:
+where a rule came from the user, the user's own words are quoted at the place
+the rule is enforced, rather than cited by a code that only resolves elsewhere.
 
 The package is separate from `session/` rather than replacing it. `session/`
 runs the fixed-order pipeline this design supersedes, and it works — the tests
@@ -20,35 +17,50 @@ would trade something that works for something that does not.
   read them and no node can write them (the agent never sets its own values).
 - `state.py` — the records, and which channels accumulate. The store is pydantic
   rather than a live networkx graph, because this state is checkpointed and
-  forked.
-- `views.py` — what each node may *see*. The file the framework choice was made
-  for.
-- `surface.py` — which graph-writes exist in which stage (tool availability is gated by stage).
+  forked. Every node takes the whole of it; there are no sub-views.
+- `surface.py` — which tools exist in which frame, and which of them wait for
+  you. Alterations are tool calls, never fields on an answer.
 - `budget.py` — pure spend arithmetic, derived from the recorded ledger.
-- `harness.py` — the one model call: allow-listed tools, the meter, the typed
-  payload, subscription auth.
-- `nodes.py` — the stages, each with its view and its payload.
-- `graph.py` — the edge list. The flow *is* this object, not a docstring about
-  one.
+- `harness.py` — the one model call: allow-listed tools, the meter that prices
+  and charges before the call runs, the gate that puts an authority-bearing call
+  to you inside the live turn, the typed payload, subscription auth.
+- `package.py` — the one place state becomes text: what a cycle hands the next,
+  once the conversation behind it has been thrown away.
+- `nodes/` — one module per frame. A frame is a stance the model is put into,
+  with its own prompt, its own tool surface and its own pool.
+- `graph.py` — the edge list, and nothing else. The flow *is* this object, not
+  a docstring about one.
 """
 
 from __future__ import annotations
 
 from .context import Budgets, BudgetNotSet, ControlContext
 from .graph import build, check_topology, compile_cycle, render, serializer
-from .harness import StageHarness, StageRequest, TurnResult, UnbuiltHarness
-from .state import Crossing, Cycle
+from .harness import (
+    Approver,
+    CallGate,
+    NobodyApproves,
+    StageHarness,
+    StageRequest,
+    TurnResult,
+    UnbuiltHarness,
+    Verdict,
+)
+from .state import Cycle
 
 __all__ = [
+    "Approver",
     "BudgetNotSet",
     "Budgets",
+    "CallGate",
     "ControlContext",
-    "Crossing",
     "Cycle",
+    "NobodyApproves",
     "StageHarness",
     "StageRequest",
     "TurnResult",
     "UnbuiltHarness",
+    "Verdict",
     "build",
     "check_topology",
     "compile_cycle",

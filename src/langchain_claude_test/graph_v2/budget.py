@@ -32,17 +32,44 @@ from collections.abc import Iterable, Mapping, Sequence
 from .context import UNKNOWN_CALL_PRICE, Budgets
 from .state import SpendEntry
 
-#: Pool names. A pool is an identity, not a number — the number is a cap in
-#: context and the balance is derived. ``a3``/``a4`` are the assumption and
-#: antithesis pools; per-assumption pools are ``a3:<assumption id>``.
-ORIENTATION = "orientation"
-ANTITHESIS = "antithesis"
-EXTRACTION = "extraction"
+# ---------------------------------------------------------------------------
+# Pool names
+# ---------------------------------------------------------------------------
+#
+# A pool is an identity, not a number — the number is a cap in context and the
+# balance is derived from the recorded spend against it.
+#
+# **Every pool name carries its cycle**, and that is not decoration. The spend
+# channel accumulates across cycles, and a balance is derived by summing every
+# entry with a matching pool name. A pool called plainly ``orientation`` would
+# therefore arrive at the second cycle already spent to zero by the first, and
+# the frame would be refused its first lookup with nothing in the record to say
+# why. Per-reading pools were cycle-scoped already, because a reading's id is;
+# these two were not, and the bug was invisible for exactly as long as no run
+# reached a second cycle.
 
-# There is deliberately no pool name for the present-and-reconcile stage. The
-# user's answer was that it has no budget — *"delay for now, but no this is just
-# a analyze and report stage at the moment."* — so its nodes open no pool, and a
-# name here would be somewhere for one to quietly reappear.
+
+def orientation_pool(cycle: int) -> str:
+    """The wide pass's pool for one cycle."""
+    return f"orientation:{cycle}"
+
+
+def antithesis_pool(cycle: int) -> str:
+    """The rival's pool for one cycle."""
+    return f"antithesis:{cycle}"
+
+
+def synthesis_pool(cycle: int) -> str:
+    """The synthesis conversation's pool, for one cycle.
+
+    One pool across every exchange of the conversation rather than one per
+    exchange, so looking is bounded while talking is not.
+    """
+    return f"synthesis:{cycle}"
+
+# There is deliberately no pool name for fact extraction. It is no longer a
+# stage of its own: it happens inside the synthesis conversation, on your words,
+# and draws on that conversation's pool like everything else there.
 
 
 def price_of(call: str, prices: Mapping[str, int]) -> int:
@@ -56,8 +83,12 @@ def price_of(call: str, prices: Mapping[str, int]) -> int:
 
 
 def assumption_pool(assumption_id: str) -> str:
-    """The pool name for one assumption's allocation."""
-    return f"a3:{assumption_id}"
+    """The pool name for one reading's allocation.
+
+    Cycle-scoped without being told the cycle: the reading's id already carries
+    it, because the graph assigns ids as ``a<cycle>.<position>``.
+    """
+    return f"assume:{assumption_id}"
 
 
 def spent_from(spend: Iterable[SpendEntry], pool: str) -> int:
