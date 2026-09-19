@@ -18,11 +18,14 @@ from collections.abc import Mapping
 from ..config import EVIDENCE_TOOL_CLASS
 from ..graph import budget
 from ..graph.state import SpendEntry
-from ..graph.surface import ALTERATION_TOOLS, Stage, bare_name
+from ..graph.surface import ALTERATION_TOOLS, READ_TOOLS, Stage, bare_name
 
 #: The price class for a write into the store, as opposed to a call that goes
 #: and looks. Priced on its own placeholder field.
 GRAPH_WRITE_CLASS = "graph_write"
+
+#: Reading the graph back. Never priced: it is our own text.
+GRAPH_READ_CLASS = "graph_read"
 
 #: The synthetic tool call ``output_format`` arrives as. Never priced.
 STRUCTURED_OUTPUT_TOOL = "StructuredOutput"
@@ -34,6 +37,8 @@ def call_class(tool_name: str) -> str | None:
     bare = bare_name(tool_name)
     if bare in ALTERATION_TOOLS:
         return GRAPH_WRITE_CLASS
+    if bare in READ_TOOLS:
+        return GRAPH_READ_CLASS
     return EVIDENCE_TOOL_CLASS.get(bare)
 
 
@@ -66,6 +71,8 @@ class Meter:
     def price(self, klass: str) -> int:
         if klass == GRAPH_WRITE_CLASS:
             return self.graph_write_price
+        if klass == GRAPH_READ_CLASS:
+            return 0
         return budget.price_of(klass, self.prices)
 
     def charge(self, tool_name: str, tool_use_id: str) -> tuple[str | None, int, int]:

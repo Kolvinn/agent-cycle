@@ -27,7 +27,7 @@ from claude_agent_sdk import (
     ToolResultBlock,
 )
 
-from ..config import EVIDENCE_TOOLS, SUBSCRIPTION_ENV, Budgets, ModelSettings
+from ..config import SUBSCRIPTION_ENV, Budgets, ModelSettings
 from ..graph.surface import GRAPH_SERVER, STAGE_BUILTINS
 from .events import EventSink, Notice, TurnFinished, TurnStarted
 from .hooks import permission_gate, post_tool_use, pre_tool_use
@@ -43,6 +43,13 @@ def compose(brief: str, message: str) -> str:
     if brief and message:
         return f"{brief}\n\n{message}"
     return brief or message or "(continue)"
+
+
+def _run_evidence(command: str, cwd: Path) -> str:
+    from . import evidence
+
+    result = evidence.run_command(command, cwd)
+    return result if isinstance(result, str) else result.text
 
 
 class SdkHarness:
@@ -120,6 +127,8 @@ class SdkHarness:
                 graph_write_price=self.budgets.graph_write_price,
             ),
             conversation=request.conversation,
+            executor=lambda command: _run_evidence(command, self.cwd),
+            max_findings=self.budgets.max_findings,
         )
         self.sink.emit(TurnStarted(label=request.label, kind="graph", stage=request.stage, cycle=request.cycle))
         translator = StreamTranslator()

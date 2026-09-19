@@ -124,6 +124,8 @@ class ApprovalAsked:
     name: str
     input: dict[str, Any]
     title: str = ""
+    #: What the call would do, as the handler's dry run described it.
+    description: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +163,8 @@ class StateSnapshot:
     #: (pool, spent, cap) for this cycle's pools.
     pools: tuple[tuple[str, int, int], ...]
     conversation: str = ""
+    #: (id, kind, role, status, text) for every live node — the browser's rows.
+    nodes: tuple[tuple[str, str, str, str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

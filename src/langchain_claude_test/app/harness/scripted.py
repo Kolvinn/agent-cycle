@@ -89,6 +89,9 @@ class ScriptedHarness:
                 graph_write_price=self.budgets.graph_write_price,
             ),
         )
+        turn.max_findings = self.budgets.max_findings
+        scripted_output: dict[str, str] = {}
+        turn.executor = lambda command: scripted_output.get("result", "")
         if request.conversation and request.fork:
             turn.conversation = f"scripted-{next(self._sessions)}"
         elif request.conversation:
@@ -118,6 +121,7 @@ class ScriptedHarness:
                     continue
                 tool_input = permission.updated_input or tool_input
             handler = handler_for(turn, request.stage, bare_name(call.name))
+            scripted_output["result"] = call.result
             if handler is not None:
                 schema = schema_for(turn, request.stage, bare_name(call.name))
                 if schema is not None:

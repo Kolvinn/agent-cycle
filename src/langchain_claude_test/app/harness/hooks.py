@@ -31,6 +31,7 @@ from ..graph.surface import available, bare_name, gated
 from .events import ApprovalAnswered, ApprovalAsked, EventSink, Priced, Refused
 from .meter import STRUCTURED_OUTPUT_TOOL
 from .protocol import ApprovalRequest, Approver, refused_by_user
+from .tools import handler_for
 from .turn import TurnContext, response_text
 
 
@@ -54,8 +55,13 @@ def pre_tool_use(turn: TurnContext, sink: EventSink):
         call_id = tool_use_id or str(input_data.get("tool_use_id", ""))
         if name == STRUCTURED_OUTPUT_TOOL:
             return {}
-        if not available(turn.request.stage, name):
-            reason = f"NOT_AVAILABLE: {bare_name(name)} does not exist in the {turn.request.stage} frame."
+        if not available(turn.request.stage, name, turn.request.withheld):
+            reason = (
+                f"NOT_AVAILABLE: {bare_name(name)} does not exist on this turn. Suggest it in text; "
+                "it exists once the user has replied."
+                if bare_name(name) in turn.request.withheld
+                else f"NOT_AVAILABLE: {bare_name(name)} does not exist in the {turn.request.stage} frame."
+            )
             turn.meter.refused.append(f"{name}: not in surface")
             sink.emit(Refused(tool_use_id=call_id, name=name, reason=reason))
             return _deny(reason)
@@ -97,6 +103,18 @@ def post_tool_use(turn: TurnContext, sink: EventSink):
     return hook
 
 
+#: Which argument names what a gated call is about, per tool.
+_TARGET_KEYS = ("target", "source", "old", "finding", "edge", "src", "ids", "id")
+
+
+def _target_of(tool_input: dict[str, Any]) -> str:
+    for key in _TARGET_KEYS:
+        value = tool_input.get(key)
+        if value:
+            return ", ".join(map(str, value)) if isinstance(value, (list, tuple)) else str(value)
+    return ""
+
+
 def _summarise(tool_input: dict[str, Any]) -> str:
     parts = [f"{k}={v!r}" for k, v in tool_input.items() if k not in ("because", "user_words")]
     return ", ".join(parts)[:400]
@@ -114,12 +132,27 @@ def permission_gate(turn: TurnContext, sink: EventSink, approver: Approver):
             # priced it in PreToolUse; it is evidence, never approval.
             return PermissionResultAllow(updated_input=tool_input)
 
+        # Check before asking: a call the handler would refuse is not a
+        # proposal. What the dry run says it would do is what the user sees.
+        effect = ""
+        handler = handler_for(turn, turn.request.stage, bare_name(tool_name))
+        if handler is not None:
+            turn.dry_run = True
+            try:
+                checked = await handler(dict(tool_input))
+            finally:
+                turn.dry_run = False
+            effect = "\n".join(b.get("text", "") for b in checked.get("content", []))
+            if checked.get("is_error"):
+                sink.emit(Refused(tool_use_id=call_id, name=bare_name(tool_name), reason=effect))
+                return PermissionResultDeny(message=effect)
+
         proposal = ProposedWrite(
             id=turn.next_proposal_id(),
             cycle=turn.request.cycle,
             write=bare_name(tool_name),
             stage=turn.request.stage,
-            target_id=str(tool_input.get("target", "") or tool_input.get("candidate_id", "")),
+            target_id=_target_of(tool_input),
             argument=_summarise(tool_input),
             because=str(tool_input.get("because", "")),
         )
@@ -130,6 +163,7 @@ def permission_gate(turn: TurnContext, sink: EventSink, approver: Approver):
                 name=proposal.write,
                 input=dict(tool_input),
                 title=getattr(context, "title", "") or f"{proposal.write} {proposal.target_id}".strip(),
+                description=effect,
             )
         )
         verdict = await approver.approve(
@@ -139,7 +173,7 @@ def permission_gate(turn: TurnContext, sink: EventSink, approver: Approver):
                 name=proposal.write,
                 input=tool_input,
                 title=getattr(context, "title", "") or "",
-                description=getattr(context, "description", "") or "",
+                description=effect or getattr(context, "description", "") or "",
                 stage=turn.request.stage,
             )
         )

@@ -13,22 +13,12 @@ from typing import Any, Callable, Literal, Mapping, Protocol
 
 from pydantic import BaseModel
 
-from ..graph.state import Decision, Explicit, Finding, Parked, ProposedWrite, SpendEntry
+from ..graph.state import Counts, Decision, Explicit, Finding, Parked, ProposedWrite, SpendEntry
 from ..graph.surface import Stage
 
 # ---------------------------------------------------------------------------
 # What a node asks for, and what it gets back
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class Counts:
-    """How many of each record this cycle already holds, so the ids the turn
-    assigns continue the sequence rather than restart it."""
-
-    findings: int = 0
-    proposals: int = 0
-    explicits: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,8 +53,13 @@ class StageRequest:
     #: Every message the user has sent this cycle. A proposed fact must be a
     #: verbatim span of one of them.
     said: tuple[str, ...] = ()
-    #: Ids an alteration may target.
+    #: Ids an alteration may target (the live claims, entities and facts).
     node_ids: frozenset[str] = frozenset()
+    #: The thought graph as the turn opens (``thought.build``); the tools
+    #: validate against a copy of it and apply their own records to that copy.
+    view: Any = None
+    #: Relations this project has added to the closed vocabulary.
+    relation_kinds: frozenset[str] = frozenset()
     #: Resolves the model's ``target`` on ``attach_finding`` to a node id.
     #: ``None`` refuses the finding. The frame knows how to map; the harness
     #: does not.
@@ -72,6 +67,9 @@ class StageRequest:
     #: Renders the running count appended after every priced call.
     status: Callable[[int], str] | None = None
     existing: Counts = field(default_factory=Counts)
+    #: In-graph tools that do not exist on this turn, though the frame carries
+    #: them: they are left off the server and refused by the hook.
+    withheld: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +86,8 @@ class TurnResult:
     decisions: tuple[Decision, ...] = ()
     explicits: tuple[Explicit, ...] = ()
     parked: tuple[Parked, ...] = ()
+    #: The graph operations the turn's tools recorded, in call order.
+    graph_ops: tuple[Any, ...] = ()
     tool_results: Mapping[str, str] = field(default_factory=dict)
     raw_reply: str = ""
     interrupted: bool = False
