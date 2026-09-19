@@ -320,7 +320,22 @@ gather anything new, so what it reports is exactly what the two earlier turns bo
 Said of a list covering: who caps the assumption count, what bounds re-authoring, whether in-graph
 bookkeeping writes are priced, whether compression needs approval, what survives compaction, where
 a new message enters, whether an antithesis may supersede, the tool names, and where state is
-stored. Each now runs on a marked placeholder rather than a refusal — see **E33**.
+stored. Each now runs on a marked placeholder rather than a refusal — see **E33**. The first of
+them is since answered — see **E37**.
+
+**E37 — There must be a limit on how many assumptions may be produced.**
+> "there should be a limit on the amount of assumptions produced"
+
+Added 2026-09-18. The *limit* is now required; the *number* is not given, so it stays a marked
+placeholder under **E33**. The two are recorded separately because they are different kinds of
+fact: a run may report that nobody has chosen the value, but it may not run without a ceiling.
+
+This closes the one item **E36** set aside that the scaffold could not proceed without. The turn
+after orientation is funded at the per-assumption rate times the count, and the turn after that at
+base plus the count — so an agent free to choose the count would be choosing its own budget, which
+**E9** forbids. The ceiling is therefore graph-owned, enforced as a refusal by the tool that writes
+a reading rather than by discarding readings afterwards, and the model is told the number and told
+it is not his to raise.
 
 ---
 

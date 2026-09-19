@@ -1,24 +1,31 @@
-"""Which graph-writes exist in which stage (tool availability is gated by stage).
+"""Which tools exist in which frame, and which of them wait for you.
 
-> *"For the most part, the availablities of the graph tools (like write
-> assumption, compress fact, etc.) are gated by the stage of the agent graph."*
+Two questions, and they are not the same one:
 
-Availability and volume are different mechanisms and this file is only the
-first. Pricing removed the per-call approval gate on depth and severity;
-staging adds that a stage simply does not carry tools outside its job. One is discretion
-at the moment of the call, the other is the shape of the surface.
+**What exists here.** A frame carries the tools its job needs and nothing else.
+Not a restraint on a wide surface — the surface is assembled per frame.
 
-**The names below are not settled.** `write assumption` and `compress fact` are
-the user's own examples; `compress`, `discard` and `register` come from the
-description of the present stage;
-the rest are the agent's guesses at what each stage needs. Read the table as the
-shape of the surface, not as a built API.
+**What waits for you.** The authority-bearing calls: registering a fact,
+promoting one, closing a node, superseding, and the compaction calls that decide
+what the next cycle can still see. Every one of them is answered by you *at the
+call*, inside the turn that made it, and what you say comes back to the model as
+the tool's result.
 
-Why this table can be trusted at all.** It only binds if the model cannot route
-around it, and deny-listing the CLI's built-in tools *failed under test* —
-blocking `Read` just made the model reach for `Bash`. So the mapping here is
-enforced by handing the harness an in-process tool server carrying exactly this
-set, with no built-in surface at all to route through. That is a hard dependency, not a preference.
+**Nothing is held back for later.** There is no queue. An earlier shape gathered
+the authority-bearing calls and resolved them after the model had finished, which
+was a way around pausing a graph mid-turn — and the pause was the problem, not
+the calls. Gating at the call means the model can propose freely, because
+proposing is not doing: *"since the tools are gated by hitl anyway, we dont have
+to worry about premature calling."*
+
+**Why this table can be trusted at all.** It only binds if the model cannot route
+around it, and deny-listing the built-in tools *failed under test* — blocking
+the read tool just made the model reach for the shell. So the surface is enforced
+by handing the harness a tool server carrying exactly the set below, with no
+built-in surface at all to route through. A hard dependency, not a preference.
+
+**The names are not settled.** Some are your examples, some describe the job.
+Read the table as the shape of the surface, not as a built API.
 """
 
 from __future__ import annotations
@@ -26,94 +33,115 @@ from __future__ import annotations
 from types import MappingProxyType
 from typing import Literal, Mapping
 
-from .state import Stage
+#: The four frames. The label is the stage — there is no longer a second, coarser
+#: taxonomy sitting beside the node names.
+Stage = Literal["orientate", "assume", "antithesis", "synthesis"]
 
-GraphWrite = Literal[
-    # stage ①
-    "register_prompt",  # verbatim, no inference — the only authority-bearing write
-    "propose_fact",  # HITL, always (a fact is not a fact until the user registers it)
-    # stage ③ / ④
-    "write_assumption",
-    "write_antithesis",
+#: Calls that go and look. Priced, and their output returns to the model in-turn.
+#:
+#: **Named after the price classes, which are your words**, not the other way
+#: round: *"might be -2, survey skills might mb -1 (like ls, tree, etc.),
+#: webfetch = 3."* The tool names here were a guess; the classes were given. So a
+#: tool is named for what it costs, and the price line in every prompt is about
+#: calls that actually exist.
+Evidence = Literal["read", "survey", "webfetch"]
+
+#: Calls that change the store.
+Alteration = Literal[
+    # the one working write — ungated, because a finding claims no authority
     "attach_finding",
-    # stage ⑤ — the widest surface (what the present stage presents)
+    # authority-bearing — answered by you at the call
+    "propose_fact",
     "promote_fact",
     "close_node",
     "supersede",
     "compress",
     "discard",
-    "reify",
 ]
 
-#: The surface per stage. Stage ② is empty, and that is the point: *"it carries
-#: no graph-write tools at all, which is what makes 'forms no claim'
-#: enforceable rather than merely intended."* (orientation forms no claim)
-STAGE_SURFACE: Mapping[Stage, frozenset[GraphWrite]] = MappingProxyType(
+Tool = Evidence | Alteration
+
+#: Alterations that take effect the moment they are called, without asking.
+UNGATED: frozenset[Alteration] = frozenset({"attach_finding"})
+
+#: Alterations you answer, at the call. *"A fact isnt a fact until it is
+#: explicitly registered via a user, so all tool calls that register
+#: facts/explicits are hitl approvals."* Compaction is in here on the same
+#: ground: it registers no fact, but deciding what the next cycle can still see
+#: is a kind of authority — and under the shape where the graph is what carries
+#: between cycles, it is the most consequential authority there is.
+GATED: frozenset[Alteration] = frozenset(
+    {"propose_fact", "promote_fact", "close_node", "supersede", "compress", "discard"}
+)
+
+#: The surface per frame.
+#:
+#: Two things in this table carry as much as the entries.
+#:
+#: ``assume`` holds no fact-touching call at all: a reading's turn gathers
+#: evidence and cannot promote what it finds, which keeps a finding from becoming
+#: a fact by enthusiasm.
+#:
+#: ``synthesis`` holds **everything**. It is the widest surface in the cycle, and
+#: that is the point of the stage rather than a relaxation of the rules: it is a
+#: conversation with you, in which the two of you decide what the graph should
+#: become and what the next cycle carries. It can look things up because you may
+#: ask it to, and every call that touches authority is answered by you as it is
+#: made.
+STAGE_TOOLS: Mapping[Stage, frozenset[Tool]] = MappingProxyType(
     {
-        "extract": frozenset({"register_prompt", "propose_fact"}),
-        "orient": frozenset(),
-        "assume": frozenset({"write_assumption", "attach_finding"}),
-        "antithesis": frozenset({"write_antithesis", "attach_finding"}),
-        "present": frozenset(
+        "orientate": frozenset({"read", "survey", "webfetch"}),
+        "assume": frozenset({"read", "survey", "webfetch", "attach_finding"}),
+        "antithesis": frozenset({"read", "survey", "webfetch", "attach_finding"}),
+        "synthesis": frozenset(
             {
+                "read",
+                "survey",
+                "webfetch",
+                "propose_fact",
                 "promote_fact",
                 "close_node",
                 "supersede",
                 "compress",
                 "discard",
-                "reify",
             }
         ),
     }
 )
 
-#: Writes that always need a human: *"all tool calls that register
-#: facts/explicits are hitl approvals."* Authority-changing calls are the clear
-#: case.
-HITL_ALWAYS: frozenset[GraphWrite] = frozenset(
-    {"propose_fact", "promote_fact", "close_node", "supersede"}
+#: The agent may not close a node in either direction, and may not promote a
+#: finding to a fact on its own motion.
+#:
+#: **These live on the last frame, because that is the frame that reads your
+#: words.** They used to sit on the first one for exactly the same reason, when
+#: the first frame was the one handed your message. It isn't: the first frame is
+#: handed a package that the last frame and you built together. So the binding
+#: problem is solved where it actually arises — the agent's reading of what you
+#: said only takes effect as a call you answer, and answering it confirms the
+#: *binding* rather than the claim. No silent reinterpretation is reachable.
+AGENT_MAY_NEVER_INITIATE: frozenset[Alteration] = frozenset(
+    {"promote_fact", "close_node", "supersede"}
 )
 
-#: Writes whose approval policy is not settled. Compression is the hard case:
-#: it registers no fact, yet it decides what the next cycle can still see, which
-#: is a kind of authority.
-#:
-#: These now carry a **default** rather than refusing, because the standing
-#: instruction is to pick defaults and mark them: a base loop has to turn over
-#: before this level of detail is worth settling. The default is *approval
-#: required* — the direction whose failure mode is friction rather than silent
-#: loss — and it is overridable per run, because it is a placeholder.
-HITL_UNRESOLVED: frozenset[GraphWrite] = frozenset({"compress", "discard", "reify"})
-
-#: The placeholder answer for :data:`HITL_UNRESOLVED`. Not a decision.
-DEFAULT_UNRESOLVED_HITL = True
-
-#: The agent may not close a node in either direction. ``close_node``
-#: is on the surface because the *user* may close one through an approved call;
-#: it is never an agent-initiated write, and the proposed exhausted-but-open
-#: split is the
-#: reason the name survives at all: the agent may close an assumption's
-#: *budget*, never its truth.
-AGENT_MAY_NEVER_INITIATE: frozenset[GraphWrite] = frozenset({"close_node", "promote_fact"})
+#: The ceiling on how many readings may exist is **not** enforced here. It is a
+#: property of the whole set rather than of any one call, and a per-call refusal
+#: could stop a fourth reading but could never produce a second — so it is bounded
+#: by the shape of the answer the first frame must return, and a violation is a
+#: retry. Writing a reading is therefore not a tool at all — and neither is
+#: writing the rival, for the same reason: exactly one is a count, and no refusal
+#: at a call can produce one that was not offered.
 
 
-def available(stage: Stage) -> frozenset[GraphWrite]:
-    """The graph-writes that exist in this stage. Everything else is absent."""
-    return STAGE_SURFACE[stage]
+def available(stage: Stage) -> frozenset[Tool]:
+    """The tools that exist in this frame. Everything else is absent."""
+    return STAGE_TOOLS[stage]
 
 
-def needs_approval(
-    write: GraphWrite, *, treat_unresolved_as_hitl: bool = DEFAULT_UNRESOLVED_HITL
-) -> bool:
-    """Whether this write must be approved before it applies.
+def gated(tool: Tool) -> bool:
+    """Whether this call is answered by you, or takes effect as it is made."""
+    return tool in GATED
 
-    Registering or promoting a fact always needs approval — *"A fact isnt a fact
-    until it is explicitly registered via a user, so all tool calls that register
-    facts/explicits are hitl approvals."* Compression and discard fall to the
-    placeholder above until the question is worth settling.
-    """
-    if write in HITL_ALWAYS:
-        return True
-    if write in HITL_UNRESOLVED:
-        return treat_unresolved_as_hitl
-    return False
+
+def evidence_tools(stage: Stage) -> frozenset[Tool]:
+    """The priced half of a frame's surface. Empty means the frame cannot look."""
+    return frozenset({t for t in STAGE_TOOLS[stage] if t in ("read", "survey", "webfetch")})

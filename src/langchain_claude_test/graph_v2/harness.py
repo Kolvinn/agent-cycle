@@ -31,13 +31,13 @@ than pretending.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Mapping, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, Protocol
 
 from pydantic import BaseModel
 
 from . import budget
-from .state import SpendEntry, Stage
-from .surface import GraphWrite
+from .state import Decision, Explicit, Finding, Parked, ProposedWrite, SpendEntry
+from .surface import GATED, UNGATED, Stage, Tool, gated
 
 if TYPE_CHECKING:  # pragma: no cover
     from claude_agent_sdk import PermissionResult, ToolPermissionContext
@@ -79,20 +79,59 @@ class StageRequest:
     #: The pydantic model the answer must validate against. Crosses the SDK
     #: boundary as a transformed wire schema; the ledger keeps this type.
     payload_schema: type[BaseModel]
-    #: The graph-writes this stage carries. Empty is legal, and is what
-    #: stage ② uses.
-    graph_writes: frozenset[GraphWrite] = frozenset()
-    #: Pool name -> cap, and there may be several. The restriction is *per
-    #: assumption* while all the readings' findings are registered in one turn,
-    #: so a single turn has to debit several separate pools. That only works if
-    #: every priced call names the assumption it serves — see :func:`route_call`.
+    #: The tools this frame carries — evidence calls and writes both. Empty is
+    #: legal, and is what the last frame uses: it reports and cannot look.
+    tools: frozenset[Tool] = frozenset()
+    #: Pool name -> cap. **In practice there is exactly one, or none.**
+    #:
+    #: It is a mapping because the restriction is *per reading*, and that once
+    #: looked like one turn debiting several pools — which would have required
+    #: every priced call to name the reading it served, and was flagged twice as
+    #: the hardest thing this boundary had to do. The problem dissolved when the
+    #: assume frame became one reading per turn: one pool is open, so there is
+    #: nothing to attribute and no call that can be misattributed. The shape
+    #: stays plural because the *cap* is still per reading; what went away is the
+    #: need to ask the model which one it meant.
+    #:
+    #: Empty is legal, and is what the last frame uses: no pool means every
+    #: priced call is refused before it is priced.
     pools: Mapping[str, int] = field(default_factory=dict)
     #: Already-recorded spend, so the meter derives each balance rather than
     #: being handed one (the agent never sets its own values).
     prior_spend: tuple[SpendEntry, ...] = ()
-    #: The pool a call that names no assumption draws from. Empty means such a
-    #: call is refused outright, which is what a per-assumption stage wants.
+    #: The pool every priced call in this turn draws from. Empty means there is
+    #: none, so a priced call is refused before it is priced — which is what the
+    #: reporting frame wants, and the second enforcement of its having no budget.
     default_pool: str = ""
+    #: Whether this turn continues the running conversation or opens a new one.
+    #:
+    #: **This is the turn boundary, made mechanical.** Continuity is why a prompt
+    #: can be a thin instruction wrapper: what the model already said is already
+    #: there, so nothing has to be re-rendered into text. The readings named in
+    #: one turn are in the next turn's context for free, and so is everything an
+    #: earlier reading looked at — which is what stops the second reading paying
+    #: to read the same file.
+    #:
+    #: **Every frame in the cycle continues.** The rival was the one candidate
+    #: for starting fresh, since a continued conversation carries the whole
+    #: affirming transcript and nothing structural can withhold it. Your call was
+    #: that it continues anyway and the reframe is carried by the prompt, in
+    #: orders — so the turn boundary is an instruction rather than a structure.
+    #: What this flag now marks is the start of a *cycle*, not a reframing.
+    continues: bool = False
+    #: Extra middleware wrapped around every tool call, outermost first. The
+    #: budget meter is always present and is not listed here — this is for
+    #: anything else a frame wants in the path: a recorder, a redactor, a cache
+    #: that serves a locator already read.
+    middleware: tuple["ToolMiddleware", ...] = ()
+    #: Renders the line appended to every tool result, given what is left in the
+    #: pool the call drew from.
+    #:
+    #: A budget stated once at the top of a turn is a budget the model is
+    #: guessing at by its fourth call. Appending it to each result means the
+    #: count comes from the meter that is actually keeping it, at the moment it
+    #: changes, and costs nothing — it rides on a message already being sent.
+    status: "Callable[[int], str] | None" = None
     turn: int = 1
 
 
@@ -113,6 +152,28 @@ class TurnResult:
     #: Calls the meter refused, with the reason. Exhaustion ends the stage
     #: (exhaustion forces a reply); it is not an error.
     refused: tuple[str, ...] = ()
+    #: Records created by this turn's ``attach_finding`` calls, in call order.
+    #:
+    #: Findings arrive as calls rather than on the payload because each is
+    #: individually checkable — the excerpt has to appear in ``tool_results`` —
+    #: and because nothing bounds how many there should be. They come back
+    #: **unstamped**: the harness does not know which reading is being funded, so
+    #: the node sets ``assumption_id`` before returning them. The graph assigns
+    #: the id, as it does everywhere else.
+    findings: tuple[Finding, ...] = ()
+    #: Every authority-bearing call the turn made, whether you allowed it or not.
+    #: A proposal is a record in its own right: what the agent wanted to do is
+    #: worth keeping even when the answer was no.
+    proposals: tuple[ProposedWrite, ...] = ()
+    #: Your answers to them, in call order, one per proposal.
+    decisions: tuple[Decision, ...] = ()
+    #: Facts registered because you allowed them. Your own words, carrying
+    #: authority — which is why they are a separate channel from anything the
+    #: agent authored.
+    explicits: tuple[Explicit, ...] = ()
+    #: Proposals you refused, parked *with your reason*, so the next cycle does
+    #: not pay to re-propose ground you have already closed.
+    parked: tuple[Parked, ...] = ()
     raw_reply: str = ""
 
 
@@ -145,8 +206,8 @@ class UnbuiltHarness:
     async def run(self, request: StageRequest) -> TurnResult:
         raise NotImplementedError(
             f"harness not built (stage 2) — {request.stage}/{request.label} asked for "
-            f"{request.payload_schema.__name__} with {len(request.graph_writes)} graph "
-            f"write(s) against pools {dict(request.pools)}"
+            f"{request.payload_schema} with {len(request.tools)} tool(s) "
+            f"against pools {dict(request.pools)}"
         )
 
 
@@ -155,28 +216,81 @@ class UnbuiltHarness:
 # ---------------------------------------------------------------------------
 
 
-class Meter:
-    """Prices every call ``can_use_tool`` is consulted about, and no others.
+#: The price class for a write into the store, as opposed to a call that goes
+#: and looks. Whether bookkeeping is priced at all is unsettled, so it runs on one
+#: placeholder field rather than a literal scattered through the code.
+GRAPH_WRITE_CLASS = "graph_write"
 
-    Availability is gated by stage, and this is the second of its two
-    enforcements: the node chose *which*
-    tools exist by which MCP server it opened, and this decides whether an
-    individual call is affordable. Both are needed — availability without
-    pricing lets one stage spend the whole cycle, pricing without availability
-    lets it spend on the wrong things.
 
-    **It routes before it prices.** A stage may hold several pools at once
-    (a per-assumption restriction inside a single turn), so the
-    first question about a call is not what it costs but whose budget it comes
-    out of. A call that cannot be attributed is refused rather than charged to a
-    default, because an unattributable call is how a per-assumption cap becomes
-    a shared pool by accident.
+@dataclass(frozen=True, slots=True)
+class ToolCall:
+    """One call, as the middleware chain sees it before it runs."""
 
-    **It accumulates into itself, not into the state.** The node reads
-    :attr:`entries` when the turn is over and returns them as a delta. If the
-    node is later replayed the turn re-runs and a fresh meter recounts; nothing
-    was written twice because nothing was written at all. That is the whole of
-    the interrupt-replay rule, kept by construction.
+    name: str
+    input: Mapping[str, Any]
+    id: str
+    pool: str
+    call_class: str
+    price: int
+
+
+@dataclass(frozen=True, slots=True)
+class ToolOutcome:
+    """What the call produced. ``ok`` is false for an error or a timeout."""
+
+    ok: bool
+    result: str
+
+
+class ToolMiddleware(Protocol):
+    """Wrapped around every tool call, in two halves.
+
+    The same shape as LangChain's tool-call middleware, which cannot be used
+    here: that API attaches to a prebuilt agent, and this design has no chat
+    model in it at all. The hooks are the same two questions either way — may
+    this run, and what happened when it did.
+
+    ``before`` returns ``None`` to allow, or a reason to refuse. It is where
+    everything that must be decided gets decided: **a tool cannot be interrupted
+    after it runs**, so anything that must not happen has to be caught here, and
+    anything recorded about the decision is recorded here too.
+
+    ``after`` cannot stop anything and is not asked to. It sees what the call
+    produced and may rewrite what the model is shown.
+    """
+
+    def before(self, call: ToolCall) -> str | None: ...
+
+    def after(self, call: ToolCall, outcome: ToolOutcome) -> ToolOutcome: ...
+
+
+class Meter(ToolMiddleware):
+    """The budget middleware. **Charges before the call runs.**
+
+    Both halves of the question are answered in :meth:`before` — can this be
+    afforded, and if so it is spent. :meth:`after` only reports where that left
+    things.
+
+    **Why the charge is not held until the call comes back.** It could be:
+    reserve on the way in, settle or release on the way out, refunding a call
+    that timed out. It is not worth what it costs. A reservation is state in
+    flight, and a harness that dies mid-call leaves one that is never settled and
+    never released, so the balance is silently wrong in the direction that
+    matters. Charging on authorisation has nothing in flight to lose.
+
+    It is also the more honest reading of what the budget prices. The limit is on
+    *when the agent stops looking and how it approaches it* — the decision to
+    spend, not the luck of the result. A call that came back empty was still a
+    call it chose to make, and refunding it would make an unlucky lookup cheaper
+    than a useful one.
+
+    **It accumulates into itself, not into the graph's state.** LangGraph commits
+    a node's update when the node returns, so there is no writing to graph state
+    from inside a tool call. This ledger *is* the immediate one: the next call's
+    affordability is answered from it, and the node hands the whole of it back as
+    a delta when the turn is over. If the node is replayed the turn re-runs and a
+    fresh meter recounts — nothing was written twice because nothing was written
+    at all.
     """
 
     def __init__(
@@ -187,9 +301,10 @@ class Meter:
         prior_spend: tuple[SpendEntry, ...] = (),
         default_pool: str = "",
         turn: int = 1,
-        stage: Stage = "orient",
+        stage: Stage = "orientate",
         graph_write_price: int = 0,
         route: "CallRouter | None" = None,
+        status: "Callable[[int], str] | None" = None,
     ) -> None:
         self.pools = dict(pools)
         self.prices = prices
@@ -197,19 +312,181 @@ class Meter:
         self.graph_write_price = graph_write_price
         self.turn = turn
         self.stage = stage
+        self.status = status
         self._prior = tuple(prior_spend)
         self._route = route or route_call
-        #: Priced calls, in order. The node's delta.
+        #: Charged calls, in order. The node's delta.
         self.entries: list[SpendEntry] = []
         #: Calls refused, with the reason. Exhaustion is an outcome, not an
-        #: error: it ends the stage (exhaustion forces a reply).
+        #: error: it ends the stage rather than failing it.
         self.refused: list[str] = []
 
     def remaining(self, pool: str) -> int:
-        """What is left in one pool, derived from prior plus this turn."""
+        """What is left: the cap, less everything charged before and during."""
         return budget.remaining(
             list(self._prior) + self.entries, pool, self.pools.get(pool, 0)
         )
+
+    def price(self, call_class: str) -> int:
+        """What one call costs. A graph-write is bookkeeping rather than evidence
+        gathering, and runs on its own placeholder rather than a literal."""
+        if call_class == GRAPH_WRITE_CLASS:
+            return self.graph_write_price
+        return budget.price_of(call_class, self.prices)
+
+    def describe(
+        self,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        context: "ToolPermissionContext | None" = None,
+    ) -> ToolCall:
+        """Build the record the middleware chain is handed."""
+        pool, call_class = self._route(tool_name, tool_input, self.default_pool)
+        return ToolCall(
+            name=tool_name,
+            input=tool_input,
+            id=getattr(context, "tool_use_id", "") or "",
+            pool=pool,
+            call_class=call_class,
+            price=self.price(call_class),
+        )
+
+    def before(self, call: ToolCall) -> str | None:
+        """Attribute it, price it, charge it — or refuse and say why.
+
+        The charge lands here, so by the time the tool runs the balance already
+        reflects it and the next call is answered against the real number. There
+        is no window in which two calls are both told they can afford the last
+        point.
+        """
+        if not call.pool or call.pool not in self.pools:
+            self.refused.append(f"{call.name}: unattributed")
+            return (
+                "NO_BUDGET: this frame has no pool for that call, so there is "
+                "nothing to charge it to and it cannot run."
+            )
+
+        left = self.remaining(call.pool)
+        if call.price > left:
+            self.refused.append(f"{call.name}: {call.pool} exhausted")
+            return (
+                f"BUDGET_EXHAUSTED: {call.call_class} costs {call.price} and "
+                f"{left} is left. Nothing further can be bought here."
+            )
+
+        if call.price:
+            self.entries.append(
+                SpendEntry(
+                    pool=call.pool,
+                    call=call.call_class,
+                    price=call.price,
+                    turn=self.turn,
+                    stage=self.stage,
+                    tool_call_id=call.id,
+                )
+            )
+        return None
+
+    def after(self, call: ToolCall, outcome: ToolOutcome) -> ToolOutcome:
+        """Tell the model where the charge left it. Changes no balance.
+
+        Nothing here can stop anything — a tool cannot be interrupted once it has
+        run — and nothing here is asked to. It appends the running count to what
+        the model is shown, from the meter that is actually keeping it, at the
+        moment it changed. That is why the count is rendered on this side: before
+        the call, it would be a number about to be wrong.
+        """
+        if self.status is None:
+            return outcome
+        return ToolOutcome(
+            ok=outcome.ok,
+            result=outcome.result + "\n" + self.status(self.remaining(call.pool)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Verdict:
+    """Your answer to one gated call.
+
+    ``words`` is the part that matters most. A refusal that says only *no*
+    leaves the agent guessing at why, and leaves nothing of what you said in the
+    record. Your words go back to the model as the call's result and into the
+    store as *your* words — authority, rather than the agent's reading of them.
+
+    ``answered_by`` is not decoration. An earlier attempt in this repository
+    shipped a human-in-the-loop stub that returned "Approved, execute operation."
+    with no human present, and nothing in the log said so. Every implementation
+    sets this honestly, and anything that is not ``human`` is meant to be
+    visible. It matters more here than it did there, because this gate sits in
+    the middle of a live turn where the agent is free to propose anything.
+    """
+
+    approved: bool
+    answered_by: Literal["human", "scripted", "auto"]
+    words: str = ""
+
+
+class Approver(Protocol):
+    """Who answers a gated call, at the moment it is made."""
+
+    async def answer(self, call: ToolCall) -> Verdict:
+        """Put the call to whoever decides, and wait.
+
+        Awaited inside a live turn, which is the whole point: the model's
+        conversation stays open across the answer, so it can react to what you
+        said and propose the next thing. The cost is that this pause is not
+        durable the way a graph-level one is — if the process dies while you are
+        deciding, the turn and its conversation go with it.
+        """
+        ...
+
+
+class NoApprover(RuntimeError):
+    """A gated call was made and nobody was wired up to answer it."""
+
+
+class NobodyApproves:
+    """The default approver. Raises, rather than deciding anything.
+
+    Not an auto-refuser. A silent refusal would let a run finish having denied
+    every proposal with nobody aware there was no human, which is the same class
+    of failure as a silent approval and only differs in which direction it is
+    wrong. Being the default, it means nobody configured an approver — a wiring
+    mistake, so it is loud.
+    """
+
+    async def answer(self, call: ToolCall) -> Verdict:
+        raise NoApprover(
+            f"{call.name} is gated and no approver is configured — set one on the "
+            f"control context"
+        )
+
+
+class CallGate:
+    """Everything consulted before a tool runs, in order, behind one callback.
+
+    The budget first, then you. That order is deliberate: a call the pool cannot
+    afford is refused without anyone being asked about it, so you are not
+    interrupted to answer for a call that was never going to run. With a gated
+    call priced at zero — the placeholder — charging before asking costs nothing
+    either way; if bookkeeping is ever priced for real, this is the line to
+    revisit.
+    """
+
+    def __init__(
+        self,
+        *,
+        meter: "Meter",
+        approver: Approver,
+        middleware: "tuple[ToolMiddleware, ...]" = (),
+    ) -> None:
+        self.meter = meter
+        self.approver = approver
+        #: The meter is always in the chain and always outermost — nothing else
+        #: should get a say about a call that cannot be paid for.
+        self.chain: tuple[ToolMiddleware, ...] = (meter,) + middleware
+        #: One per gated call, in order.
+        self.verdicts: list[tuple[ToolCall, Verdict]] = []
 
     async def can_use_tool(
         self,
@@ -217,64 +494,73 @@ class Meter:
         tool_input: dict[str, Any],
         context: "ToolPermissionContext",
     ) -> "PermissionResult":
-        """The gate. Attribute it, price it, then allow or refuse.
+        """The SDK-facing callback. Price it, then ask.
 
-        ``StructuredOutput`` never arrives here, so it is never priced — see
-        :data:`STRUCTURED_OUTPUT_TOOL`. The guard below exists anyway, because a
-        measured absence is a fact about one SDK version, and a silent change
-        would bill the ledger for its own bookkeeping.
+        ``StructuredOutput`` never arrives here, so it is never priced and never
+        gated — see :data:`STRUCTURED_OUTPUT_TOOL`. The guard exists anyway,
+        because a measured absence is a fact about one SDK version and a silent
+        change would put the model's own bookkeeping in front of you for
+        approval.
         """
         from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
         if tool_name == STRUCTURED_OUTPUT_TOOL:
             return PermissionResultAllow()
 
-        pool, call_class = self._route(tool_name, tool_input, self.default_pool)
+        call = self.meter.describe(tool_name, tool_input, context)
 
-        if not pool or pool not in self.pools:
-            self.refused.append(f"{tool_name}: unattributed")
-            return PermissionResultDeny(
-                message=(
-                    "UNATTRIBUTED_CALL: name the assumption this call serves. "
-                    "Every priced call is charged to one reading's budget."
-                )
-            )
+        refusal = apply_middleware(self.chain, call)
+        if refusal:
+            return PermissionResultDeny(message=refusal)
 
-        # A graph-write is bookkeeping, not evidence gathering. Whether "tool
-        # usage registered to point values" was meant to cover it is unsettled,
-        # so the price comes from one placeholder field rather than from a
-        # literal scattered through the code.
-        price = (
-            self.graph_write_price
-            if call_class == GRAPH_WRITE_CLASS
-            else budget.price_of(call_class, self.prices)
-        )
+        if not gated(call.name):
+            return PermissionResultAllow()
 
-        left = self.remaining(pool)
-        if price > left:
-            self.refused.append(f"{tool_name}: {pool} exhausted")
-            return PermissionResultDeny(
-                message=(
-                    f"BUDGET_EXHAUSTED: {call_class} costs {price} and {pool} has {left} "
-                    f"left. Stop spending on this reading and report what you have."
-                )
-            )
-
-        self.entries.append(
-            SpendEntry(
-                pool=pool,
-                call=call_class,
-                price=price,
-                turn=self.turn,
-                stage=self.stage,
-                tool_call_id=getattr(context, "tool_use_id", "") or "",
-            )
-        )
+        verdict = await self.approver.answer(call)
+        self.verdicts.append((call, verdict))
+        if not verdict.approved:
+            return PermissionResultDeny(message=refused_by_user(verdict))
+        # ⚠️ Words on an *approval* have nowhere to ride back on: the SDK's allow
+        # carries no message. Getting them in front of the model is stage 2's
+        # problem, on the tool-result path, and they are on the record either way.
         return PermissionResultAllow()
 
 
-#: The price class used for in-graph writes, as opposed to evidence calls.
-GRAPH_WRITE_CLASS = "graph_write"
+def refused_by_user(verdict: Verdict) -> str:
+    """What the model is shown when you say no.
+
+    Marked as coming from you, not from the machinery. A refusal the model reads
+    as a system limit is one it will try to route around; a refusal it reads as
+    the user speaking is one it can answer.
+    """
+    if not verdict.words:
+        return "REFUSED BY THE USER. No reason was given."
+    return f"REFUSED BY THE USER. Their words, verbatim: {verdict.words}"
+
+
+def apply_middleware(
+    chain: "tuple[ToolMiddleware, ...]", call: ToolCall
+) -> str | None:
+    """Ask every middleware, outermost first. The first refusal wins.
+
+    Short-circuits, so a call refused for budget is never also asked about by
+    whatever sits inside the meter — there is nothing to ask, the call is not
+    happening.
+    """
+    for layer in chain:
+        refusal = layer.before(call)
+        if refusal:
+            return refusal
+    return None
+
+
+def apply_after(
+    chain: "tuple[ToolMiddleware, ...]", call: ToolCall, outcome: ToolOutcome
+) -> ToolOutcome:
+    """Unwind the chain, innermost first, each seeing what the last produced."""
+    for layer in reversed(chain):
+        outcome = layer.after(call, outcome)
+    return outcome
 
 
 class CallRouter(Protocol):
@@ -285,23 +571,39 @@ class CallRouter(Protocol):
     ) -> tuple[str, str]: ...
 
 
+#: Every call that changes the store rather than going to look at something.
+ALTERATIONS: frozenset[str] = frozenset(UNGATED | GATED)
+
+
 def route_call(
     tool_name: str, tool_input: dict[str, Any], default_pool: str
 ) -> tuple[str, str]:
     """Which pool pays, and which price class applies.
 
-    ⚠️ **Built in the next stage.** Both halves wait on the same thing: the
-    in-graph tool surface is not settled (`surface.py` says so in its own
-    docstring), and the price classes named — survey, read, webfetch — were
-    given without naming the tools that fall in them. Writing the mapping now
-    would be inventing prices for tools that do not exist.
+    **Both halves are now answerable, and neither was when this was written.**
 
-    The *shape* is the architectural claim and does not wait: attribution comes
-    from the call's own arguments. Every priced tool in the in-graph surface
-    takes a required ``for_assumption``, which is what lets one turn hold one
-    cap per reading.
+    The pool is ``default_pool``, always. This used to read a required
+    ``for_assumption`` argument off the call, because one turn held one cap per
+    reading and every priced call had to say which it served — the hardest thing
+    this boundary had to do, flagged twice as a blocker. One reading per turn
+    dissolved it: exactly one pool is open, so there is nothing to attribute and
+    nothing that can be misattributed.
+
+    The price class is the tool's own name, because the evidence tools are
+    *named after their price classes* — ``read``, ``survey``, ``webfetch`` are
+    the classes you gave, and naming the tools after them was the fix for prompts
+    that quoted prices for tools that did not exist. An alteration is not
+    evidence gathering and is priced as bookkeeping instead, on the one
+    placeholder field for it.
+
+    ⚠️ The identity holds only while every evidence tool *is* a price class. The
+    moment there is a ``grep`` that costs what a survey costs, this needs a real
+    mapping — and an unknown class charges the most expensive rate rather than
+    nothing, which is the right direction to fail in.
     """
-    raise NotImplementedError("call routing is stage 2 — tool names and price classes unsettled")
+    if tool_name in ALTERATIONS:
+        return default_pool, GRAPH_WRITE_CLASS
+    return default_pool, tool_name
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +652,7 @@ def validate_payload(schema: type[BaseModel], structured_output: Any) -> BaseMod
 # ---------------------------------------------------------------------------
 
 
-def build_options(request: StageRequest, *, model: str, meter: Meter, mcp_servers: Any) -> Any:
+def build_options(request: StageRequest, *, model: str, gate: CallGate, mcp_servers: Any) -> Any:
     """Assemble ``ClaudeAgentOptions`` for one stage turn.
 
     Every field set here is load-bearing and the reason is on the line. The
@@ -364,16 +666,18 @@ def build_options(request: StageRequest, *, model: str, meter: Meter, mcp_server
         # An allow-list. Deny-listing leaked under test, so there is no built-in
         # surface at all and every tool is in-graph.
         tools=[],
-        # Nothing auto-approved, so the meter is consulted for every call. An
-        # entry here allowing a whole tool would shadow it.
+        # Nothing auto-approved, so the gate is consulted for every call. An
+        # entry here allowing a whole tool would shadow it — including the
+        # authority-bearing ones, which would approve them with nobody asked.
         allowed_tools=[],
-        # NOT bypassPermissions — that approves before the meter is consulted.
+        # NOT bypassPermissions — that approves before the gate is consulted.
         permission_mode="default",
         system_prompt=request.system,
         # The only structured-output mechanism the Claude Code surface has.
         # There is no tool_choice forcing and no response_format.
         output_format={"type": "json_schema", "schema": to_wire_schema(request.payload_schema)},
-        can_use_tool=meter.can_use_tool,
+        # The budget and the approval, behind one callback.
+        can_use_tool=gate.can_use_tool,
         mcp_servers=mcp_servers,
         env=dict(SUBSCRIPTION_ENV),
     )

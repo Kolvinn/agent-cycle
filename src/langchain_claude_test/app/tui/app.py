@@ -1,0 +1,203 @@
+"""The app: a transcript, an input, a graph panel, a status line."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
+from textual.message import Message
+from textual.widgets import Static
+
+from ..config import AppConfig
+from ..harness import events as ev
+from ..runner import Runner
+from ..session import SessionRecord
+from .divider import Divider
+from .panels import GraphPanel, StatusBar
+from .prompt import PromptInput
+from .screens import TuiApprover
+from .transcript import Transcript
+
+PANEL_MIN, PANEL_MAX, PANEL_STEP, PANEL_DEFAULT = 20, 100, 6, 40
+
+
+class HarnessEventMessage(Message):
+    def __init__(self, event: ev.HarnessEvent) -> None:
+        super().__init__()
+        self.event = event
+
+
+class TuiSink:
+    """The :class:`EventSink` the runner emits into: posts to the app."""
+
+    def __init__(self, app: "ProvenanceApp") -> None:
+        self.app = app
+
+    def emit(self, event: ev.HarnessEvent) -> None:
+        self.app.post_message(HarnessEventMessage(event))
+
+
+class ProvenanceApp(App[None]):
+    TITLE = "provenance"
+    CSS = """
+    Screen { layout: vertical; }
+    #body { height: 1fr; }
+    #main { width: 1fr; }
+    #transcript { height: 1fr; }
+    #hint { height: auto; color: $text-muted; padding: 0 2; }
+    #hint.empty { display: none; }
+    #panel { width: 40; }
+    #panel.hidden { display: none; }
+    """
+    BINDINGS = [
+        Binding("escape", "interrupt", "Interrupt", priority=True),
+        Binding("ctrl+q", "quit", "Quit", priority=True),
+        Binding("ctrl+g", "toggle_panel", "Graph panel", priority=True),
+        Binding("ctrl+left", "panel_wider", "Wider panel", priority=True),
+        Binding("ctrl+right", "panel_narrower", "Narrower panel", priority=True),
+        Binding("pageup", "page_up", "Scroll up", priority=True),
+        Binding("pagedown", "page_down", "Scroll down", priority=True),
+        Binding("ctrl+end", "follow", "Jump to end", priority=True),
+    ]
+
+    def __init__(self, config: AppConfig, session: str | None = None) -> None:
+        super().__init__()
+        self.config = config
+        self.initial_session = session
+        self.sink = TuiSink(self)
+        self.approver = TuiApprover(self)
+        self.runner = Runner(config=config, sink=self.sink, approver=self.approver)
+        self.runner.on_session = self._session_changed
+        self.runner.on_quit = self.exit
+        self.runner.surface_commands["panel"] = self._panel_command
+        self.transcript = Transcript(id="transcript")
+        self.panel = GraphPanel(id="panel")
+        self.panel_width = PANEL_DEFAULT
+        self.divider = Divider(self.resize_panel, id="divider")
+        self.status = StatusBar(id="status")
+        self.input = PromptInput(self.runner.commands.suggestions(), id="input")
+        self.hint = Static("", id="hint", classes="empty")
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="body"):
+            with Vertical(id="main"):
+                yield self.transcript
+                yield self.hint
+                yield self.input
+            yield self.divider
+            yield self.panel
+        yield self.status
+
+    def on_mount(self) -> None:
+        self.input.focus()
+        self.status.set_busy(False)
+        self.run_worker(self._run_runner(), exclusive=True, name="runner")
+        self.set_interval(0.25, self._poll_busy)
+
+    async def _run_runner(self) -> None:
+        try:
+            await self.runner.run(self.initial_session)
+        except Exception as exc:  # the shell died; say so rather than vanish
+            self.transcript.apply(ev.Notice(text=f"runner stopped: {type(exc).__name__}: {exc}", level="error"))
+
+    def _poll_busy(self) -> None:
+        self.status.set_busy(self.runner.busy)
+
+    def _session_changed(self, record: SessionRecord | None) -> None:
+        self.status.set_session(record)
+        self.status.set_settings(self.runner.settings.model, self.runner.settings.effort)
+
+    # --- input ----------------------------------------------------------------------
+
+    def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
+        text = event.text.strip()
+        if not text:
+            return
+        self.transcript.user(text)
+        self.runner.submit(text)
+
+    def on_prompt_input_hint_changed(self, event: PromptInput.HintChanged) -> None:
+        self.hint.update("  ".join(event.matches))
+        self.hint.set_class(not event.matches, "empty")
+
+    async def action_interrupt(self) -> None:
+        await self.runner.interrupt()
+
+    def action_page_up(self) -> None:
+        self.transcript.page_up()
+
+    def action_page_down(self) -> None:
+        self.transcript.page_down()
+
+    def action_follow(self) -> None:
+        self.transcript.follow()
+
+    # --- the graph panel ---------------------------------------------------------------
+
+    @property
+    def panel_visible(self) -> bool:
+        return not self.panel.has_class("hidden")
+
+    def show_panel(self, visible: bool) -> None:
+        self.panel.set_class(not visible, "hidden")
+        self.divider.set_class(not visible, "hidden")
+
+    def resize_panel(self, width: int) -> None:
+        self.panel_width = max(PANEL_MIN, min(PANEL_MAX, width))
+        self.panel.styles.width = self.panel_width
+        self.show_panel(True)
+
+    def action_toggle_panel(self) -> None:
+        self.show_panel(not self.panel_visible)
+
+    def action_panel_wider(self) -> None:
+        self.resize_panel(self.panel_width + PANEL_STEP)
+
+    def action_panel_narrower(self) -> None:
+        self.resize_panel(self.panel_width - PANEL_STEP)
+
+    def _panel_command(self, args: str) -> None:
+        arg = args.strip().lower()
+        if arg in ("", "toggle"):
+            self.action_toggle_panel()
+        elif arg in ("show", "on"):
+            self.show_panel(True)
+        elif arg in ("hide", "off", "close"):
+            self.show_panel(False)
+        elif arg.isdigit():
+            self.resize_panel(int(arg))
+        else:
+            self.transcript.apply(ev.Notice(text="usage: /panel [show|hide|<width>]", level="warning"))
+
+    # --- events ---------------------------------------------------------------------
+
+    def on_harness_event_message(self, message: HarnessEventMessage) -> None:
+        event = message.event
+        if isinstance(event, ev.StateSnapshot):
+            self.panel.apply(event)
+        else:
+            self.transcript.apply(event)
+        self.status.apply(event)
+
+
+def run(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="langchain-claude-test", description="A Claude shell with a provenance cycle behind /graph.")
+    parser.add_argument("session", nargs="?", help="session to open or create")
+    parser.add_argument("--cwd", default=None, help="the directory the model works in (default: here)")
+    parser.add_argument("--model", default=None, help="model alias or id for new turns")
+    args = parser.parse_args(argv)
+    config = AppConfig.default(Path(args.cwd) if args.cwd else None)
+    if args.model:
+        config = AppConfig(
+            cwd=config.cwd,
+            sessions_dir=config.sessions_dir,
+            modes=config.modes,
+            settings=config.settings.with_model(args.model),
+            budgets=config.budgets,
+            prices=config.prices,
+            extra_env=config.extra_env,
+        )
+    ProvenanceApp(config, args.session).run()
