@@ -82,20 +82,20 @@ def test_call_classes_map_builtins_and_alterations():
 
 
 def test_meter_charges_before_the_call_and_refuses_when_exhausted():
-    m = Meter(stage="assume", pools={"assume:a1.1": 5}, prices={"read": 2, "survey": 1}, default_pool="assume:a1.1")
+    m = Meter(stage="orientate", pools={"orientation:1": 5}, prices={"read": 2, "survey": 1}, default_pool="orientation:1")
     assert m.charge("Read", "t1") == (None, 2, 3)
     assert m.charge("Read", "t2") == (None, 2, 1)
     refusal, price, left = m.charge("Read", "t3")
     assert refusal and refusal.startswith("BUDGET_EXHAUSTED") and price == 2 and left == 1
     assert m.charge("Glob", "t4") == (None, 1, 0)
     assert [e.tool_call_id for e in m.entries] == ["t1", "t2", "t4"]
-    assert m.refused == ["Read: assume:a1.1 exhausted"]
+    assert m.refused == ["Read: orientation:1 exhausted"]
     assert m.price_paid("t2") == 2 and m.price_paid("t3") == 0
 
 
 def test_meter_derives_from_prior_spend():
-    prior = (SpendEntry(pool="p", call="read", price=4, stage="assume"),)
-    m = Meter(stage="assume", pools={"p": 5}, prices={"read": 2}, default_pool="p", prior_spend=prior)
+    prior = (SpendEntry(pool="p", call="read", price=4, stage="orientate"),)
+    m = Meter(stage="orientate", pools={"p": 5}, prices={"read": 2}, default_pool="p", prior_spend=prior)
     assert m.remaining() == 1
     assert m.charge("Read", "t")[0] is not None
 
@@ -107,5 +107,5 @@ def test_meter_without_a_pool_refuses_priced_calls_but_not_free_writes():
 
 
 def test_unknown_tool_is_refused_as_unavailable():
-    m = Meter(stage="assume", pools={"p": 5}, prices={}, default_pool="p")
+    m = Meter(stage="orientate", pools={"p": 5}, prices={}, default_pool="p")
     assert m.charge("Bash", "t")[0].startswith("NOT_AVAILABLE")

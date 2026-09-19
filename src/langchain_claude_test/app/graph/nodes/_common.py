@@ -1,13 +1,18 @@
-"""What every frame shares: how a turn continues the cycle's conversation, and
-how the prices are stated."""
+"""What every frame shares: how a turn continues the cycle's conversation, how
+the prices are stated, and how a frame that retries carries what the earlier
+attempt already produced."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
+from dataclasses import replace
+
+import networkx as nx
 
 from ...config import EVIDENCE_TOOL_CLASS
-from ...harness.protocol import Counts
-from ..state import GraphState
+from ...harness.protocol import TurnResult
+from .. import thought
+from ..state import Compression, Counts, EdgeAdded, Finding, GraphState, NodeAdded, RelationKind
 
 
 def price_line(prices: Mapping[str, int]) -> str:
@@ -26,11 +31,44 @@ def continued(conversation: str) -> dict:
     return {"conversation": conversation, "fork_conversation": False}
 
 
-def counts(state: GraphState, cycle: int | None = None) -> Counts:
-    """This cycle's record counts, so a turn continues the id sequence."""
-    c = state.cycle if cycle is None else cycle
-    return Counts(
-        findings=sum(1 for f in state.findings if f.cycle == c),
-        proposals=sum(1 for p in state.proposed if p.cycle == c),
-        explicits=sum(1 for e in state.explicits if e.cycle == c),
-    )
+class Attempts:
+    """What a frame accumulates across its attempts at one turn.
+
+    A retry opens a new turn on the same conversation; the ids it assigns must
+    continue after the first attempt's, and its view must include what the
+    first attempt added. Nothing here is in the log yet — the frame appends
+    everything at once when it is done, so an interrupted retry leaves nothing
+    behind.
+    """
+
+    def __init__(self, view: nx.MultiDiGraph, counts: Counts, relation_kinds: Iterable[str]) -> None:
+        self.view = view.copy()
+        self.base = counts
+        self.relation_kinds = set(relation_kinds)
+        self.findings: list[Finding] = []
+        self.ops: list = []
+        self.spend: list = []
+
+    def absorb(self, result: TurnResult) -> None:
+        self.spend.extend(result.spend)
+        self.findings.extend(result.findings)
+        self.ops.extend(result.graph_ops)
+        for record in (*result.findings, *result.graph_ops):
+            thought.apply(self.view, record)
+        self.relation_kinds |= {o.name for o in result.graph_ops if isinstance(o, RelationKind)}
+
+    @property
+    def counts(self) -> Counts:
+        """The base counts plus what earlier attempts produced."""
+        return replace(
+            self.base,
+            findings=self.base.findings + len(self.findings),
+            entities=self.base.entities + sum(1 for o in self.ops if isinstance(o, NodeAdded) and o.kind == "entity"),
+            claims=self.base.claims + sum(1 for o in self.ops if isinstance(o, NodeAdded) and o.kind == "claim"),
+            edges=self.base.edges + sum(1 for o in self.ops if isinstance(o, EdgeAdded)),
+            summaries=self.base.summaries + sum(1 for o in self.ops if isinstance(o, Compression)),
+        )
+
+    def stamped(self, cycle: int) -> list:
+        """The findings with the cycle stamped, then the ops, for the log."""
+        return [*(f.model_copy(update={"cycle": cycle}) for f in self.findings), *self.ops]

@@ -61,18 +61,21 @@ EVIDENCE_TOOLS: tuple[str, ...] = tuple(EVIDENCE_TOOL_CLASS)
 class Budgets:
     """Every cap in the cycle, in one place, owned by the graph."""
 
-    #: Five points per reading — the user's number: *"if there are 3
-    #: assumptions, where each assumption has a budget of 5"*.
+    #: Five points per assumption — the user's number: *"if there are 3
+    #: assumptions, where each assumption has a budget of 5"*. Since the survey
+    #: and the assumptions are one frame, this funds the survey: the orientate
+    #: pool is ``orientation_base + per_assumption * max_assumptions``.
     per_assumption: int = 5
     #: The rival pass is funded at ``base + N``, and base is five: *"the budget
     #: has the base (5) + assumption N (3) = 8"*.
     antithesis_base: int = 5
-    #: Points for the wide orientation pass. Never assigned by the design.
-    orientation_points: int = 5
+    #: The survey's own share of the orientate pool, on top of the per-assumption
+    #: allowance. Never assigned by the design.
+    orientation_base: int = 5
     #: Points for the whole synthesis conversation of one cycle, not per
     #: exchange: looking is bounded, talking is not.
     synthesis_points: int = 5
-    #: Ceiling on readings per cycle. *"there should be a limit on the amount
+    #: Ceiling on assumptions per cycle. *"there should be a limit on the amount
     #: of assumptions produced"* — the limit is required, the number is not.
     max_assumptions: int = 3
     #: How many times a frame may re-author an answer of the wrong shape.
@@ -80,6 +83,16 @@ class Budgets:
     #: What an in-graph bookkeeping write costs. Every priced example the user
     #: gave was evidence gathering, so this stays visible in one field.
     graph_write_price: int = 0
+    #: ``attach_finding`` is free — *"attach finding should be free, but have a
+    #: hard limit"* — and this is the limit: findings one turn may create.
+    #: Overwriting one the turn just created does not count again.
+    max_findings: int = 12
+    #: How far from the cycle's question and the facts the package renders in
+    #: full; beyond that a node is one line and the read tools fetch it.
+    package_hops: int = 2
+    #: After how many cycles a provisional node nothing approved connects to
+    #: is proposed for compression.
+    stale_after: int = 2
 
     def with_(self, **overrides: Any) -> Budgets:
         return replace(self, **overrides)
@@ -88,11 +101,14 @@ class Budgets:
 #: Fields whose value is a placeholder, not a decision.
 PROVISIONAL: frozenset[str] = frozenset(
     {
-        "orientation_points",
+        "orientation_base",
         "synthesis_points",
         "max_assumptions",
         "max_reauthor_attempts",
         "graph_write_price",
+        "max_findings",
+        "package_hops",
+        "stale_after",
         "Grep->survey",
     }
 )
@@ -224,6 +240,24 @@ class Mode:
     allowed_tools: tuple[str, ...] = ()
     model: str | None = None
 
+    #: Where this mode was defined: the directory of the ``modes.toml`` that
+    #: declared it, or the package for a built-in. A prompt ``file`` is
+    #: relative to this first, then to the package's own ``prompts/``.
+    origin: Path | None = None
+
+    def prompt_file(self, base_dir: Path) -> Path:
+        """Resolve ``system_prompt = { file = ... }``: beside the modes file
+        that declared the mode if it is there, else in the package."""
+        name = Path(str(self.system_prompt["file"]))  # type: ignore[index]
+        candidates = [name] if name.is_absolute() else [
+            *([self.origin / name] if self.origin is not None else []),
+            base_dir / name,
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate.resolve()
+        return candidates[-1].resolve()
+
     def sdk_system_prompt(self, base_dir: Path) -> Any:
         """The ``ClaudeAgentOptions.system_prompt`` value for this mode."""
         sp = self.system_prompt
@@ -232,7 +266,7 @@ class Mode:
         if isinstance(sp, str):
             return sp
         if "file" in sp:
-            return {"type": "file", "path": str((base_dir / sp["file"]).resolve())}
+            return {"type": "file", "path": str(self.prompt_file(base_dir))}
         if "preset" in sp:
             out: dict[str, Any] = {"type": "preset", "preset": sp["preset"]}
             if sp.get("append"):
@@ -251,7 +285,7 @@ DEFAULT_MODES: tuple[Mode, ...] = (
     Mode(
         name="graph",
         kind="graph",
-        description="The provenance cycle: orientate, assume, antithesis, synthesis.",
+        description="The provenance cycle: orientate, antithesis, synthesis.",
         system_prompt={"file": "prompts/graph_system.md"},
     ),
 )
@@ -309,7 +343,7 @@ def load_modes(path: Path, *, base_dir: Path | None = None) -> Modes:
             kwargs["tools"] = tuple(kwargs["tools"])
         if "allowed_tools" in kwargs:
             kwargs["allowed_tools"] = tuple(kwargs["allowed_tools"])
-        modes[name] = Mode(name=name, **kwargs)
+        modes[name] = Mode(name=name, origin=path.parent.resolve(), **kwargs)
     default = (data.get("default") or "chat")
     if default not in modes:
         raise ValueError(f"default mode {default!r} is not defined")

@@ -11,7 +11,7 @@ import pytest
 from langchain_claude_test.app.config import AppConfig, builtin_modes
 from langchain_claude_test.app.harness import events as ev
 from langchain_claude_test.app.harness.events import ListSink, TextDone
-from langchain_claude_test.app.harness.scripted import Call, ScriptedApprover, ScriptedHarness, Turn
+from langchain_claude_test.app.harness.scripted import ScriptedApprover, ScriptedHarness, Turn
 from langchain_claude_test.app.runner import Runner
 
 from .test_cycle import QUESTION, script
@@ -102,10 +102,10 @@ async def test_focus_routes_plain_text_and_the_graph_runs_a_cycle(tmp_path: Path
 
         await drive(runner, f"/graph {QUESTION}")
         stages = [e.stage for e in sink.events if isinstance(e, ev.StageFinished)]
-        assert stages == ["orientate", "assume", "antithesis", "synthesis"]
+        assert stages == ["orientate", "antithesis", "synthesis"]
         snap = [e for e in sink.events if isinstance(e, ev.StateSnapshot)][-1]
         assert snap.cycle == 1 and snap.stage == "synthesis"
-        assert any(pool == "assume:a1.1" and spent == 4 and cap == 5 for pool, spent, cap in snap.pools)
+        assert any(pool == "orientation:1" and spent == 5 and cap == 20 for pool, spent, cap in snap.pools)
 
         harness.queue("synthesis", Turn(payload={"text": "reply handled"}))
         await drive(runner, "tell me more")
@@ -121,7 +121,7 @@ async def test_focus_routes_plain_text_and_the_graph_runs_a_cycle(tmp_path: Path
         assert any("leave the graph" in n for n in notices(sink))
 
         await drive(runner, "/show budget")
-        assert any("assume:a1.1: 4 of 5" in n for n in notices(sink))
+        assert any("orientation:1: 5 of 20" in n for n in notices(sink))
         await drive(runner, "/nonsense")
         assert any("unknown command /nonsense" in n for n in notices(sink))
     finally:
@@ -143,7 +143,19 @@ async def test_sessions_fork_and_resume_carry_the_graph(tmp_path: Path):
         assert runner.session.forked_from == "one" and runner.session.focus == "graph"
         state = await runner._graph.state()
         assert state is not None and state.cycle == 1 and state.fork_conversation is True
-        assert [a.id for a in state.assumptions] == ["a1.1", "a1.2"]
+        # the fork shares the project's graph: same log, same cycle, same ids
+        ledger = runner.graph_store.ledger()
+        assert list(ledger.assumptions) == ["a1.1", "a1.2"] and ledger.cycles[1].session == "one"
+        assert (tmp_path / "sessions" / "graph" / "ops.jsonl").exists()
+
+        # the reads the agent has, from the prompt
+        await drive(runner, "/show package", "/show node a1.1", "/show search webhook signature", "/show neighbours a1.1 1", "/show node nope")
+        shown = notices(sink)
+        assert any("ASSUMPTIONS MADE SO FAR" in n and "[f1.1]" in n for n in shown)
+        assert any(n.startswith("assumption a1.1:") and "→ cites f1.1" in n for n in shown)
+        assert any("[q1] question:" in n and "match)" in n for n in shown)
+        assert any("within 1 hop(s):" in n and "[q1]" in n for n in shown)
+        assert any("'nope' is not a node" in n for n in shown)
 
         # the fork's next exchange forks the SDK conversation; the original does not
         harness.queue("synthesis", Turn(payload={"text": "in the fork"}))
@@ -201,6 +213,68 @@ async def test_model_and_effort_pickers_offer_the_cli_list_and_persist(tmp_path:
         assert runner.settings.effort == "high" and runner.settings.model == "default"
         await drive(runner, "/fork picked")
         assert runner.store.load("picked").effort == "high"
+    finally:
+        await runner.stop()
+        await task
+
+
+@pytest.mark.asyncio
+async def test_budget_and_prices_are_set_from_the_prompt_and_persist(tmp_path: Path):
+    FakeChat.instances.clear()
+    harness = ScriptedHarness(script=script(), approver=ScriptedApprover())
+    runner, sink = make_runner(tmp_path, harness)
+    task = asyncio.create_task(runner.run("caps"))
+    try:
+        await drive(runner, "/budget")
+        assert any("per_assumption = 5" in n and "orientation_base = 5" in n for n in notices(sink))
+        await drive(runner, "/budget per_assumption 2", "/budget max_assumptions 0", "/budget nonsense 3", "/prices read 4")
+        assert runner.budgets.per_assumption == 2 and runner.budgets.max_assumptions == 3
+        assert runner.prices["read"] == 4
+        assert any("cannot be 0" in n for n in notices(sink)) and any("usage: /budget" in n for n in notices(sink))
+        record = runner.store.load("caps")
+        assert record.budgets == {"per_assumption": 2} and record.prices == {"read": 4}
+        assert runner._graph is not None and runner._graph.ctx.budgets.per_assumption == 2
+        assert harness.budgets.per_assumption == 2 and harness.prices["read"] == 4
+
+        # the next cycle opens its pool at the new size: 5 + 2·3 = 11, and reads cost 4
+        await drive(runner, f"/graph {QUESTION}")
+        snap = [e for e in sink.events if isinstance(e, ev.StateSnapshot)][-1]
+        assert any(pool == "orientation:1" and cap == 11 for pool, _, cap in snap.pools)
+        assert any(isinstance(e, ev.Priced) and e.name == "Read" and e.price == 4 for e in sink.events)
+
+        await drive(runner, "/new fresh")
+        assert runner.budgets.per_assumption == 5 and runner.prices["read"] == 2
+        await drive(runner, "/resume caps")
+        assert runner.budgets.per_assumption == 2 and runner.prices["read"] == 4
+        await drive(runner, "/budget reset", "/prices reset")
+        assert runner.budgets == runner.config.budgets and runner.prices == dict(runner.config.prices)
+    finally:
+        await runner.stop()
+        await task
+
+
+@pytest.mark.asyncio
+async def test_graph_alone_resumes_an_interrupted_cycle(tmp_path: Path):
+    from langchain_claude_test.app.harness.scripted import Turn
+
+    FakeChat.instances.clear()
+    s = script()
+    s["antithesis"] = [Turn(payload=None, interrupt=True)]
+    harness = ScriptedHarness(script=s, approver=ScriptedApprover())
+    runner, sink = make_runner(tmp_path, harness)
+    task = asyncio.create_task(runner.run("stopped"))
+    try:
+        await drive(runner, f"/graph {QUESTION}")
+        assert any("interrupted" in n for n in notices(sink))
+        assert await runner._graph.pending() == ("antithesis",)
+        harness.queue("antithesis", script()["antithesis"][0])
+        harness.queue("synthesis", script()["synthesis"][0])
+        await drive(runner, "/budget antithesis_base 9", "/graph")
+        assert any("resuming the cycle at antithesis" in n for n in notices(sink))
+        state = await runner._graph.state()
+        assert state is not None and state.stage == "synthesis" and state.cycle == 1
+        assert harness.requests[-2].pools == {"antithesis:1": 11}
+        assert await runner._graph.pending() == ()
     finally:
         await runner.stop()
         await task

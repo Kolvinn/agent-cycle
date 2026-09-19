@@ -42,8 +42,10 @@ BUILTINS: Mapping[str, str] = {
     "interrupt": "/interrupt — stop the turn in flight (also Esc)",
     "model": "/model [alias] — pick from the CLI's own model list, or set one directly (sonnet, opus, haiku, default, a full id)",
     "effort": "/effort [level] — pick the effort level (low, medium, high, xhigh, max)",
-    "panel": "/panel [show|hide|<width>] — the graph panel (also ctrl+g to toggle, ctrl+left/right to resize)",
-    "show": "/show graph|package|state|budget — inspect what the graph holds",
+    "panel": "/panel [show|hide|<width>|view outline|kind|status] — the graph browser (ctrl+g toggles, ctrl+b cycles the view, ctrl+left/right resize; select a node to see it in full)",
+    "show": "/show graph|package|budget|state | node <id> | neighbours <id> [depth] | search <text> — inspect the graph",
+    "budget": "/budget [<field> <n> | reset] — the cycle's caps (per_assumption, antithesis_base, orientation_base, synthesis_points, max_assumptions …); no args lists them",
+    "prices": "/prices [<class> <n> | reset] — what a tool call costs by class (survey, read, webfetch); no args lists them",
     "modes": "/modes — list the modes the / commands can switch to",
     "help": "/help — this list",
     "quit": "/quit — leave",
@@ -89,7 +91,7 @@ class CommandSet:
         lines = ["Modes (from modes.toml):"]
         for name in self.modes.names():
             m = self.modes[name]
-            extra = " — enters the provenance cycle; /graph <query> starts one" if m.kind == "graph" else ""
+            extra = " — enters the provenance cycle; /graph <query> starts one, /graph alone resumes an interrupted one" if m.kind == "graph" else ""
             lines.append(f"  /{name}{extra}{(' — ' + m.description) if m.description and not extra else ''}")
         lines.append("")
         lines.append("Built-ins:")

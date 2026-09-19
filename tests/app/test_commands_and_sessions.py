@@ -46,6 +46,20 @@ def test_modes_file_adds_and_overrides(tmp_path: Path):
     assert modes.graph.sdk_system_prompt(PKG)["type"] == "file"
 
 
+def test_a_prompt_file_resolves_beside_the_modes_file_then_in_the_package(tmp_path: Path):
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "mine.md").write_text("be terse")
+    (tmp_path / "modes.toml").write_text(
+        '[modes.terse]\nsystem_prompt = { file = "prompts/mine.md" }\n\n'
+        '[modes.shared]\nsystem_prompt = { file = "prompts/graph_system.md" }\n'
+    )
+    modes = load_modes(tmp_path / "modes.toml", base_dir=PKG)
+    # the working directory's own file wins
+    assert modes["terse"].sdk_system_prompt(PKG)["path"] == str((tmp_path / "prompts" / "mine.md").resolve())
+    # a name only the package has falls back to the package
+    assert modes["shared"].sdk_system_prompt(PKG)["path"] == str((PKG / "prompts" / "graph_system.md").resolve())
+
+
 def test_modes_file_rejects_unknown_keys(tmp_path: Path):
     f = tmp_path / "modes.toml"
     f.write_text('[modes.x]\nbogus = 1\n')

@@ -32,7 +32,7 @@ FIXTURE = ROOT / "tests" / "fixtures" / "repo"
 QUESTION = "Where do we validate the incoming webhook signature?"
 REPLY = (
     "I think the validation is in signature.py and the handler just calls it. "
-    "Register that as a fact, and propose closing whichever reading it confirms."
+    "Register that as a fact, and propose closing whichever assumption it confirms."
 )
 
 
@@ -77,14 +77,22 @@ async def main() -> int:
     print(f"  sdk conversations   : {sorted(sessions)}")
     print(f"  cost (estimate)     : ${cost:.4f}")
     print(f"  events log          : {config.sessions_dir / 'spike09' / 'events.jsonl'}")
+    ledger = runner.graph_store.ledger()
+    from langchain_claude_test.app.graph.state import EdgeAdded, NodeAdded
+
+    print(f"  op log              : {ledger.lines} lines, cycle {ledger.last_cycle}, "
+          f"{len(ledger.findings)} finding(s), {len(ledger.assumptions)} assumption(s), {len(ledger.antitheses)} rival(s), "
+          f"{sum(1 for o in ledger.ops if isinstance(o, NodeAdded))} node(s) added, "
+          f"{sum(1 for o in ledger.ops if isinstance(o, EdgeAdded))} relation(s)")
 
     checks = [
-        ("all four frames finished", stages[:4] == ["orientate", "assume", "antithesis", "synthesis"]),
+        ("all three frames finished", stages[:3] == ["orientate", "antithesis", "synthesis"]),
         ("the reply re-entered synthesis", stages.count("synthesis") >= 2),
         ("at least one call was priced", len(priced) >= 1),
         ("StructuredOutput was never priced", not any(p.name == "StructuredOutput" for p in priced)),
         ("one conversation carried every frame", len(sessions) == 1),
         ("every turn returned its payload", all(e.ok for e in finished if not e.interrupted)),
+        ("the graph landed in the op log", ledger.last_cycle == 1 and len(ledger.assumptions) >= 1 and len(ledger.antitheses) == len(ledger.assumptions)),
     ]
     for label, passed in checks:
         ok &= passed
