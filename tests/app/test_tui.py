@@ -64,3 +64,50 @@ async def test_app_runs_a_scripted_cycle_and_draws_it(tmp_path: Path):
         assert FakeChat.instances[0].sent == ["hi"]
         assistant = [plain(w) for w in app.transcript.query(".assistant")]
         assert any("echo: hi" in a for a in assistant)
+
+
+@pytest.mark.asyncio
+async def test_panel_can_be_hidden_resized_and_shown(tmp_path: Path):
+    FakeChat.instances.clear()
+    config = AppConfig(cwd=tmp_path, sessions_dir=tmp_path / "sessions", modes=builtin_modes(PKG))
+    app = ProvenanceApp(config, "panel")
+    app.runner._harness_factory = lambda r: ScriptedHarness(script=script(), approver=ScriptedApprover())
+    app.runner._chat_factory = FakeChat
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.2)
+        assert app.panel_visible and app.panel.styles.width.value == 40
+        await pilot.press("ctrl+g")
+        assert not app.panel_visible
+        await pilot.press("ctrl+left")
+        assert app.panel_visible and app.panel.styles.width.value == 46
+        app.input.value = "/panel 30"
+        await pilot.press("enter")
+        await app.runner.queue.join()
+        await pilot.pause(0.1)
+        assert app.panel.styles.width.value == 30
+        app.input.value = "/panel hide"
+        await pilot.press("enter")
+        await app.runner.queue.join()
+        await pilot.pause(0.1)
+        assert not app.panel_visible
+        assert "sonnet · medium" in plain(app.status)
+
+
+@pytest.mark.asyncio
+async def test_dragging_the_divider_resizes_the_panel(tmp_path: Path):
+    FakeChat.instances.clear()
+    config = AppConfig(cwd=tmp_path, sessions_dir=tmp_path / "sessions", modes=builtin_modes(PKG))
+    app = ProvenanceApp(config, "drag")
+    app.runner._harness_factory = lambda r: ScriptedHarness(script=script(), approver=ScriptedApprover())
+    app.runner._chat_factory = FakeChat
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.2)
+        assert app.divider.region.x == 120 - 40 - 1
+        await pilot.mouse_down(app.divider, offset=(0, 5))
+        await pilot.hover(offset=(59, 5))  # screen coordinates: 20 columns left of the divider
+        await pilot.mouse_up(offset=(59, 5))
+        await pilot.pause(0.1)
+        assert app.panel.styles.width.value == 60
+        assert app.divider.region.x == 120 - 60 - 1
+        await pilot.press("ctrl+g")
+        assert not app.divider.display

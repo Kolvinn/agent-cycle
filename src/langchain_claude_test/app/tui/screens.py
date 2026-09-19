@@ -14,11 +14,17 @@ from typing import Any
 
 from rich.text import Text
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, OptionList, Static, TextArea
+from textual.widgets.option_list import Option
 
 from ..harness.protocol import ApprovalRequest, Verdict
+
+
+class WordsArea(TextArea):
+    BINDINGS = [Binding("ctrl+a", "select_all", "Select all", show=False)]
 
 
 class ApprovalScreen(ModalScreen[Verdict]):
@@ -30,7 +36,8 @@ class ApprovalScreen(ModalScreen[Verdict]):
     ApprovalScreen TextArea { height: 5; }
     ApprovalScreen Horizontal { height: 3; align: right middle; }
     """
-    BINDINGS = [("ctrl+a", "approve", "Approve"), ("ctrl+r", "refuse", "Refuse")]
+    #: ctrl+a is select-all in the words box, so the verdict keys are y/n.
+    BINDINGS = [("ctrl+y", "approve", "Approve"), ("ctrl+n", "refuse", "Refuse")]
 
     def __init__(self, request: ApprovalRequest) -> None:
         super().__init__()
@@ -47,10 +54,10 @@ class ApprovalScreen(ModalScreen[Verdict]):
                 yield Static(Text(r.description))
             yield Static(Text(json.dumps(dict(r.input), indent=1, default=str)), classes="input")
             yield Label("Your words (they go back to the model, approved or not):")
-            yield TextArea(id="words")
+            yield WordsArea(id="words")
             with Horizontal():
-                yield Button("Approve  ctrl+a", id="approve", variant="success")
-                yield Button("Refuse  ctrl+r", id="refuse", variant="error")
+                yield Button("Approve  ctrl+y", id="approve", variant="success")
+                yield Button("Refuse  ctrl+n", id="refuse", variant="error")
 
     def on_mount(self) -> None:
         self.query_one("#words", TextArea).focus()
@@ -103,6 +110,50 @@ class QuestionScreen(ModalScreen[str]):
             self.dismiss(event.value.strip())
 
 
+class ChoiceScreen(ModalScreen[str | None]):
+    """Pick one value for a shell setting (``/model``, ``/effort``); Esc leaves it."""
+
+    DEFAULT_CSS = """
+    ChoiceScreen { align: center middle; }
+    ChoiceScreen > Vertical { width: 80; max-height: 80%; border: thick $accent; background: $surface; padding: 1 2; }
+    ChoiceScreen .title { text-style: bold; color: $accent; }
+    ChoiceScreen OptionList { height: auto; max-height: 16; }
+    ChoiceScreen .hint { color: $text-muted; }
+    """
+    BINDINGS = [("escape", "leave", "Leave as is")]
+
+    def __init__(self, title: str, options: list[tuple[str, str]], current: str = "") -> None:
+        super().__init__()
+        self.title_text = title
+        self.options = options
+        self.current = current
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label(Text(self.title_text), classes="title")
+            yield OptionList(
+                *[Option(Text(("● " if value == self.current else "  ") + label), id=f"opt-{i}") for i, (value, label) in enumerate(self.options)],
+                id="options",
+            )
+            yield Label("Enter picks · Esc leaves it as is", classes="hint")
+
+    def on_mount(self) -> None:
+        options = self.query_one("#options", OptionList)
+        for i, (value, _) in enumerate(self.options):
+            if value == self.current:
+                options.highlighted = i
+                break
+        else:
+            options.highlighted = 0 if self.options else None
+        options.focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(self.options[event.option_index][0])
+
+    def action_leave(self) -> None:
+        self.dismiss(None)
+
+
 class TuiApprover:
     """The :class:`Approver` the runner uses — modals over the app."""
 
@@ -123,3 +174,9 @@ class TuiApprover:
             self.app.call_later(self.app.push_screen, QuestionScreen(q), lambda v, f=future: f.set_result(v))
             answers[q.get("question", "")] = await future
         return answers
+
+    async def choose(self, title: str, options: list[tuple[str, str]], current: str = "") -> str | None:
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[str | None] = loop.create_future()
+        self.app.call_later(self.app.push_screen, ChoiceScreen(title, options, current), lambda v: future.set_result(v))
+        return await future

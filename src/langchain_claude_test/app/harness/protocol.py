@@ -159,6 +159,10 @@ class Approver(Protocol):
         """Answer the model's ``AskUserQuestion``: question text -> label(s)."""
         ...
 
+    async def choose(self, title: str, options: list[tuple[str, str]], current: str = "") -> str | None:
+        """Pick one of ``(value, label)`` for a shell setting, or ``None`` to leave it."""
+        ...
+
 
 class NoApprover(RuntimeError):
     """A call needed a human and nobody was wired up to answer."""
@@ -172,6 +176,9 @@ class NobodyApproves:
 
     async def ask(self, questions: list[dict[str, Any]]) -> dict[str, Any]:
         raise NoApprover("the model asked a question and no approver is configured")
+
+    async def choose(self, title: str, options: list[tuple[str, str]], current: str = "") -> str | None:
+        return None
 
 
 def refused_by_user(verdict: Verdict) -> str:

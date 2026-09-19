@@ -9,16 +9,19 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
-from textual.suggester import SuggestFromList
-from textual.widgets import Input
+from textual.widgets import Static
 
 from ..config import AppConfig
 from ..harness import events as ev
 from ..runner import Runner
 from ..session import SessionRecord
+from .divider import Divider
 from .panels import GraphPanel, StatusBar
+from .prompt import PromptInput
 from .screens import TuiApprover
 from .transcript import Transcript
+
+PANEL_MIN, PANEL_MAX, PANEL_STEP, PANEL_DEFAULT = 20, 100, 6, 40
 
 
 class HarnessEventMessage(Message):
@@ -44,11 +47,20 @@ class ProvenanceApp(App[None]):
     #body { height: 1fr; }
     #main { width: 1fr; }
     #transcript { height: 1fr; }
-    #input { dock: bottom; }
+    #hint { height: auto; color: $text-muted; padding: 0 2; }
+    #hint.empty { display: none; }
+    #panel { width: 40; }
+    #panel.hidden { display: none; }
     """
     BINDINGS = [
         Binding("escape", "interrupt", "Interrupt", priority=True),
         Binding("ctrl+q", "quit", "Quit", priority=True),
+        Binding("ctrl+g", "toggle_panel", "Graph panel", priority=True),
+        Binding("ctrl+left", "panel_wider", "Wider panel", priority=True),
+        Binding("ctrl+right", "panel_narrower", "Narrower panel", priority=True),
+        Binding("pageup", "page_up", "Scroll up", priority=True),
+        Binding("pagedown", "page_down", "Scroll down", priority=True),
+        Binding("ctrl+end", "follow", "Jump to end", priority=True),
     ]
 
     def __init__(self, config: AppConfig, session: str | None = None) -> None:
@@ -60,20 +72,22 @@ class ProvenanceApp(App[None]):
         self.runner = Runner(config=config, sink=self.sink, approver=self.approver)
         self.runner.on_session = self._session_changed
         self.runner.on_quit = self.exit
+        self.runner.surface_commands["panel"] = self._panel_command
         self.transcript = Transcript(id="transcript")
         self.panel = GraphPanel(id="panel")
+        self.panel_width = PANEL_DEFAULT
+        self.divider = Divider(self.resize_panel, id="divider")
         self.status = StatusBar(id="status")
-        self.input = Input(
-            placeholder="message, or /command  (/help)",
-            suggester=SuggestFromList(self.runner.commands.suggestions(), case_sensitive=False),
-            id="input",
-        )
+        self.input = PromptInput(self.runner.commands.suggestions(), id="input")
+        self.hint = Static("", id="hint", classes="empty")
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="body"):
             with Vertical(id="main"):
                 yield self.transcript
+                yield self.hint
                 yield self.input
+            yield self.divider
             yield self.panel
         yield self.status
 
@@ -94,19 +108,69 @@ class ProvenanceApp(App[None]):
 
     def _session_changed(self, record: SessionRecord | None) -> None:
         self.status.set_session(record)
+        self.status.set_settings(self.runner.settings.model, self.runner.settings.effort)
 
     # --- input ----------------------------------------------------------------------
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        text = event.value.strip()
-        self.input.value = ""
+    def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
+        text = event.text.strip()
         if not text:
             return
         self.transcript.user(text)
         self.runner.submit(text)
 
+    def on_prompt_input_hint_changed(self, event: PromptInput.HintChanged) -> None:
+        self.hint.update("  ".join(event.matches))
+        self.hint.set_class(not event.matches, "empty")
+
     async def action_interrupt(self) -> None:
         await self.runner.interrupt()
+
+    def action_page_up(self) -> None:
+        self.transcript.page_up()
+
+    def action_page_down(self) -> None:
+        self.transcript.page_down()
+
+    def action_follow(self) -> None:
+        self.transcript.follow()
+
+    # --- the graph panel ---------------------------------------------------------------
+
+    @property
+    def panel_visible(self) -> bool:
+        return not self.panel.has_class("hidden")
+
+    def show_panel(self, visible: bool) -> None:
+        self.panel.set_class(not visible, "hidden")
+        self.divider.set_class(not visible, "hidden")
+
+    def resize_panel(self, width: int) -> None:
+        self.panel_width = max(PANEL_MIN, min(PANEL_MAX, width))
+        self.panel.styles.width = self.panel_width
+        self.show_panel(True)
+
+    def action_toggle_panel(self) -> None:
+        self.show_panel(not self.panel_visible)
+
+    def action_panel_wider(self) -> None:
+        self.resize_panel(self.panel_width + PANEL_STEP)
+
+    def action_panel_narrower(self) -> None:
+        self.resize_panel(self.panel_width - PANEL_STEP)
+
+    def _panel_command(self, args: str) -> None:
+        arg = args.strip().lower()
+        if arg in ("", "toggle"):
+            self.action_toggle_panel()
+        elif arg in ("show", "on"):
+            self.show_panel(True)
+        elif arg in ("hide", "off", "close"):
+            self.show_panel(False)
+        elif arg.isdigit():
+            self.resize_panel(int(arg))
+        else:
+            self.transcript.apply(ev.Notice(text="usage: /panel [show|hide|<width>]", level="warning"))
 
     # --- events ---------------------------------------------------------------------
 

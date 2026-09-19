@@ -19,7 +19,7 @@ from typing import Any, Awaitable, Callable
 
 from .chat import ChatDriver
 from .commands import Command, CommandSet, parse
-from .config import AppConfig, Mode
+from .config import EFFORT_DESCRIPTIONS, EFFORT_LEVELS, FALLBACK_MODELS, AppConfig, Mode, ModelChoice
 from .graph import ControlContext
 from .graph.graph import sqlite_checkpointer
 from .graph_driver import GraphDriver, snapshot
@@ -59,6 +59,9 @@ class Runner:
         self._busy = False
         self.on_session: Callable[[SessionRecord | None], None] | None = None
         self.on_quit: Callable[[], Awaitable[None] | None] | None = None
+        #: Handled by the shell's surface (the TUI), not here: command name -> handler.
+        self.surface_commands: dict[str, Callable[[str], Awaitable[None] | None]] = {}
+        self._catalog: list[ModelChoice] = []
 
     # --- lifecycle -----------------------------------------------------------
 
@@ -101,8 +104,11 @@ class Runner:
         await self._close_clients()
         record = self.store.load(name)
         self.session = record
+        self.settings = self.config.settings
         if record.model:
             self.settings = self.settings.with_model(record.model)
+        if record.effort:
+            self.settings = self.settings.with_effort(record.effort)
         log = JsonlSink(self.store.events_path(name))
         self._session_sink = FanoutSink(self.sink, log)
         self._graph = GraphDriver(
@@ -243,6 +249,12 @@ class Runner:
             await self._fork(cmd.args or None)
         elif name == "model":
             await self._set_model(cmd.args)
+        elif name == "effort":
+            await self._set_effort(cmd.args)
+        elif name in self.surface_commands:
+            result = self.surface_commands[name](cmd.args)
+            if result is not None:
+                await result
         elif name == "show":
             await self._show(cmd.args)
         elif self.commands.is_passthrough(name):
@@ -276,19 +288,74 @@ class Runner:
         if args:
             await self._plain(args)
 
+    # --- model and effort ------------------------------------------------------
+
+    async def catalog(self) -> list[ModelChoice]:
+        """The CLI's own model list, learned once from the default connection."""
+        if not self._catalog and self.session is not None:
+            try:
+                driver = await self._chat(self.session.mode)
+                self._catalog = list(await driver.catalog())
+            except Exception as exc:
+                self.sink.emit(Notice(text=f"could not list models from the CLI ({exc}); using the last known list", level="warning"))
+        return self._catalog or list(FALLBACK_MODELS)
+
+    def _choice(self, model: str) -> ModelChoice | None:
+        for c in self._catalog or FALLBACK_MODELS:
+            if model in (c.value, c.resolved):
+                return c
+        return None
+
     async def _set_model(self, model: str) -> None:
         assert self.session is not None
         if not model:
-            self.sink.emit(Notice(text=f"model: {self.settings.model}"))
-            return
+            options = [(c.value, f"{c.display} — {c.description}" if c.description else c.display) for c in await self.catalog()]
+            picked = await self.approver.choose("Model", options, current=self.settings.model)
+            if not picked:
+                self.sink.emit(Notice(text=f"model: {self.settings.model}  effort: {self.settings.effort}"))
+                return
+            model = picked
         self.settings = self.settings.with_model(model)
         self.session.model = model
         self._save()
         for driver in self._chats.values():
             await driver.set_model(model)
+        self._push_settings()
+        choice = self._choice(model)
+        if choice is not None and choice.efforts and self.settings.effort not in choice.efforts:
+            self.sink.emit(Notice(text=f"{choice.display} accepts effort {', '.join(choice.efforts)}; current is {self.settings.effort}", level="warning"))
+        elif choice is not None and not choice.efforts and self._catalog:
+            self.sink.emit(Notice(text=f"{choice.display} takes no effort level; /effort has no effect on it", level="warning"))
+        self.sink.emit(Notice(text=f"model set to {model} for new turns"))
+
+    async def _set_effort(self, level: str) -> None:
+        assert self.session is not None
+        choice = self._choice(self.settings.model)
+        levels = tuple(choice.efforts) if choice is not None and choice.efforts else EFFORT_LEVELS
+        if not level:
+            options = [(lvl, f"{lvl} — {EFFORT_DESCRIPTIONS.get(lvl, '')}") for lvl in levels]
+            picked = await self.approver.choose("Effort", options, current=self.settings.effort)
+            if not picked:
+                self.sink.emit(Notice(text=f"effort: {self.settings.effort}"))
+                return
+            level = picked
+        level = level.strip().lower()
+        if level not in EFFORT_LEVELS:
+            self.sink.emit(Notice(text=f"effort must be one of {', '.join(EFFORT_LEVELS)}", level="warning"))
+            return
+        if level not in levels:
+            self.sink.emit(Notice(text=f"{self.settings.model} accepts {', '.join(levels)}; setting {level} anyway", level="warning"))
+        self.settings = self.settings.with_effort(level)
+        self.session.effort = level
+        self._save()
+        for driver in self._chats.values():
+            await driver.set_effort(level)
+        self._push_settings()
+        self.sink.emit(Notice(text=f"effort set to {level} for new turns"))
+
+    def _push_settings(self) -> None:
         if self._harness is not None and hasattr(self._harness, "settings"):
             self._harness.settings = self.settings
-        self.sink.emit(Notice(text=f"model set to {model} for new turns"))
 
     async def _show(self, what: str) -> None:
         assert self._graph is not None
@@ -317,6 +384,7 @@ class Runner:
         record.focus = source.focus
         record.conversations = dict(source.conversations)
         record.model = source.model
+        record.effort = source.effort
         record.forked_from = source.name
         self.store.save(record)
         if state is not None:

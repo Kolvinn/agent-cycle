@@ -10,8 +10,8 @@ Two kinds of command, one namespace:
   defines (``/reviewer``, ``/agent``) switches the plain connection's system
   prompt and tool surface. They are data.
 - **built-ins** manage sessions and the run: ``/new``, ``/sessions``,
-  ``/resume``, ``/fork``, ``/interrupt``, ``/model``, ``/show``, ``/help``,
-  ``/quit``.
+  ``/resume``, ``/fork``, ``/interrupt``, ``/model``, ``/effort``, ``/panel``,
+  ``/show``, ``/help``, ``/quit``.
 
 Anything else that starts with ``/`` is passed to the SDK conversation when
 the focus is a chat mode — the CLI runs its own built-ins (``/compact``,
@@ -40,7 +40,9 @@ BUILTINS: Mapping[str, str] = {
     "resume": "/resume <name> — open a session",
     "fork": "/fork [name] — copy the current session, graph state and all, into a new one",
     "interrupt": "/interrupt — stop the turn in flight (also Esc)",
-    "model": "/model <alias> — set the model for new turns (sonnet, opus, haiku, or a full id)",
+    "model": "/model [alias] — pick from the CLI's own model list, or set one directly (sonnet, opus, haiku, default, a full id)",
+    "effort": "/effort [level] — pick the effort level (low, medium, high, xhigh, max)",
+    "panel": "/panel [show|hide|<width>] — the graph panel (also ctrl+g to toggle, ctrl+left/right to resize)",
     "show": "/show graph|package|state|budget — inspect what the graph holds",
     "modes": "/modes — list the modes the / commands can switch to",
     "help": "/help — this list",

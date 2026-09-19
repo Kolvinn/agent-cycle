@@ -164,7 +164,9 @@ class ScriptedApprover:
 
     verdicts: deque[Verdict] = field(default_factory=deque)
     answers: deque[dict[str, Any]] = field(default_factory=deque)
+    choices: deque[str | None] = field(default_factory=deque)
     asked: list[ApprovalRequest] = field(default_factory=list)
+    offered: list[tuple[str, tuple[tuple[str, str], ...], str]] = field(default_factory=list)
 
     @classmethod
     def approving(cls, n: int, words: str = "") -> ScriptedApprover:
@@ -185,6 +187,11 @@ class ScriptedApprover:
             raise AssertionError("scripted answers exhausted")
         return self.answers.popleft()
 
+    async def choose(self, title: str, options: list[tuple[str, str]], current: str = "") -> str | None:
+        """A scripted pick, or ``None`` (leave the setting) when none was scripted."""
+        self.offered.append((title, tuple(options), current))
+        return self.choices.popleft() if self.choices else None
+
 
 class AutoApprover:
     """Approves everything and says so in every record. For spikes only."""
@@ -199,3 +206,6 @@ class AutoApprover:
 
     async def ask(self, questions: list[dict[str, Any]]) -> dict[str, Any]:
         return {q.get("question", ""): (q.get("options") or [{}])[0].get("label", "") for q in questions}
+
+    async def choose(self, title: str, options: list[tuple[str, str]], current: str = "") -> str | None:
+        return None

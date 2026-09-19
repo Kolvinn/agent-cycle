@@ -42,7 +42,19 @@ class FakeChat:
         pass
 
     async def set_model(self, model: str) -> None:
-        pass
+        self.model = model
+
+    async def set_effort(self, effort: str) -> None:
+        self.effort = effort
+        self.closed = True  # the real driver drops its client and resumes on the next send
+
+    async def catalog(self):
+        from langchain_claude_test.app.config import ModelChoice
+
+        return [
+            ModelChoice("default", "Default (recommended)", "Opus 5", "claude-opus-5[1m]", ("low", "medium", "high", "xhigh", "max")),
+            ModelChoice("haiku", "Haiku", "Haiku 4.5", "claude-haiku-4-5-20251001", ()),
+        ]
 
     async def close(self) -> None:
         self.closed = True
@@ -148,6 +160,47 @@ async def test_sessions_fork_and_resume_carry_the_graph(tmp_path: Path):
         assert "one" in listing and "two" in listing and "(current)" in listing
         await drive(runner, "/new three")
         assert runner.session.name == "three" and runner.session.focus == "chat"
+    finally:
+        await runner.stop()
+        await task
+
+
+@pytest.mark.asyncio
+async def test_model_and_effort_pickers_offer_the_cli_list_and_persist(tmp_path: Path):
+    FakeChat.instances.clear()
+    harness = ScriptedHarness(script=script(), approver=ScriptedApprover())
+    runner, sink = make_runner(tmp_path, harness)
+    approver = harness.approver
+    approver.choices.extend(["haiku", None, "high"])
+    task = asyncio.create_task(runner.run("pick"))
+    try:
+        await drive(runner, "/model")  # scripted pick: haiku, from the fake CLI's list
+        assert approver.offered[0][0] == "Model"
+        assert [v for v, _ in approver.offered[0][1]] == ["default", "haiku"]
+        assert runner.settings.model == "haiku"
+        assert runner.store.load("pick").model == "haiku"
+        assert any("takes no effort level" in n for n in notices(sink))
+
+        await drive(runner, "/model")  # scripted: leave as is
+        assert runner.settings.model == "haiku"
+
+        await drive(runner, "/model default", "/effort")  # scripted pick: high
+        assert approver.offered[2][0] == "Effort"
+        assert [v for v, _ in approver.offered[2][1]] == ["low", "medium", "high", "xhigh", "max"]
+        assert runner.settings.effort == "high"
+        assert runner.settings.sdk_model is None
+        assert FakeChat.instances[0].effort == "high" and FakeChat.instances[0].closed
+
+        await drive(runner, "/effort silly")
+        assert runner.settings.effort == "high"
+        assert any("effort must be one of" in n for n in notices(sink))
+
+        await drive(runner, "/new other")
+        assert runner.settings.effort == "medium" and runner.settings.model == "sonnet"
+        await drive(runner, "/resume pick")
+        assert runner.settings.effort == "high" and runner.settings.model == "default"
+        await drive(runner, "/fork picked")
+        assert runner.store.load("picked").effort == "high"
     finally:
         await runner.stop()
         await task

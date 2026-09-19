@@ -15,7 +15,7 @@ from typing import Any
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage
 
-from .config import SUBSCRIPTION_ENV, Mode, ModelSettings
+from .config import SUBSCRIPTION_ENV, Mode, ModelChoice, ModelSettings
 from .harness.events import EventSink, Notice, TurnFinished, TurnStarted
 from .harness.hooks import chat_gate
 from .harness.protocol import Approver
@@ -52,7 +52,7 @@ class ChatDriver:
         if self.mode.tools is not None:
             kwargs["tools"] = list(self.mode.tools)
         return ClaudeAgentOptions(
-            model=self.mode.model or self.settings.model,
+            model=self.mode.model or self.settings.sdk_model,
             thinking=dict(self.settings.thinking),
             effort=self.settings.effort,
             include_partial_messages=True,
@@ -60,7 +60,7 @@ class ChatDriver:
             allowed_tools=list(self.mode.allowed_tools),
             permission_mode="default",
             can_use_tool=chat_gate(self.sink, self.approver),
-            resume=self.resume or None,
+            resume=self.session_id or None,
             cwd=self.cwd,
             env={**dict(SUBSCRIPTION_ENV), **self.extra_env},
             **kwargs,
@@ -118,7 +118,20 @@ class ChatDriver:
     async def set_model(self, model: str) -> None:
         self.settings = self.settings.with_model(model)
         if self._client is not None:
-            await self._client.set_model(model)
+            await self._client.set_model(self.settings.sdk_model)
+
+    async def set_effort(self, effort: str) -> None:
+        """Effort is fixed at connect, so the held client closes; the next
+        message reopens the same conversation (``resume``) at the new level."""
+        self.settings = self.settings.with_effort(effort)
+        await self.close()
+
+    async def catalog(self) -> list[ModelChoice]:
+        """The models the CLI itself offers, from its ``initialize`` reply."""
+        await self.connect()
+        assert self._client is not None
+        info = await self._client.get_server_info() or {}
+        return [ModelChoice.from_init(m) for m in info.get("models", []) or [] if isinstance(m, dict)]
 
     async def close(self) -> None:
         client, self._client = self._client, None

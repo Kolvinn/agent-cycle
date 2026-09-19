@@ -73,7 +73,7 @@ class SdkHarness:
     def options(self, request: StageRequest, turn: TurnContext) -> ClaudeAgentOptions:
         server = graph_server(turn, request.stage)
         return ClaudeAgentOptions(
-            model=self.settings.model,
+            model=self.settings.sdk_model,
             thinking=dict(self.settings.thinking),
             effort=self.settings.effort,
             include_partial_messages=True,

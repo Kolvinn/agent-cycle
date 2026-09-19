@@ -128,6 +128,61 @@ class ModelSettings:
     def with_model(self, model: str) -> ModelSettings:
         return replace(self, model=model)
 
+    def with_effort(self, effort: str) -> ModelSettings:
+        return replace(self, effort=effort)  # type: ignore[arg-type]
+
+    @property
+    def sdk_model(self) -> str | None:
+        """What goes on the wire: ``None`` lets the CLI pick its own default."""
+        return None if self.model in ("", "default") else self.model
+
+
+#: The levels the CLI's ``/effort`` offers, in order. What a given model
+#: accepts comes from the CLI's model list (``ModelChoice.efforts``).
+EFFORT_LEVELS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+
+EFFORT_DESCRIPTIONS: Mapping[str, str] = MappingProxyType(
+    {
+        "low": "fastest, least thinking",
+        "medium": "moderate thinking",
+        "high": "thorough",
+        "xhigh": "extended reasoning depth",
+        "max": "maximum effort",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ModelChoice:
+    """One entry of the CLI's own model list, as its ``initialize`` reply gives it."""
+
+    value: str
+    display: str
+    description: str = ""
+    resolved: str = ""
+    efforts: tuple[str, ...] = ()
+
+    @classmethod
+    def from_init(cls, raw: Mapping[str, Any]) -> ModelChoice:
+        return cls(
+            value=str(raw.get("value", "")),
+            display=str(raw.get("displayName", raw.get("value", ""))),
+            description=str(raw.get("description", "")),
+            resolved=str(raw.get("resolvedModel", "")),
+            efforts=tuple(str(e) for e in raw.get("supportedEffortLevels", []) or []),
+        )
+
+
+#: What the CLI listed on 2026-09-19 under a Max subscription; used only when
+#: no live connection has answered yet. The live list always wins.
+FALLBACK_MODELS: tuple[ModelChoice, ...] = (
+    ModelChoice("default", "Default (recommended)", "the CLI's own default", "", EFFORT_LEVELS),
+    ModelChoice("opus[1m]", "Opus (1M context)", "Opus 5 with 1M context", "claude-opus-5[1m]", EFFORT_LEVELS),
+    ModelChoice("claude-fable-5-1[1m]", "Fable", "Fable 5.1", "claude-fable-5-1", EFFORT_LEVELS),
+    ModelChoice("sonnet", "Sonnet", "Sonnet 5", "claude-sonnet-5", EFFORT_LEVELS),
+    ModelChoice("haiku", "Haiku", "Haiku 4.5", "claude-haiku-4-5-20251001", ()),
+)
+
 
 #: Plumbing and tests never inherit a heavyweight default.
 TEST_MODEL = "claude-haiku-4-5-20251001"

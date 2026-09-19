@@ -35,6 +35,7 @@ class SessionRecord:
     #: Chat mode name -> SDK session id, so ``/reviewer`` resumes its own thread.
     conversations: dict[str, str] = field(default_factory=dict)
     model: str | None = None
+    effort: str | None = None
     #: The session this one was forked from, if any.
     forked_from: str = ""
 

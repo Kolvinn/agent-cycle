@@ -6,6 +6,7 @@ import json
 
 from rich.markdown import Markdown
 from rich.text import Text
+from textual import events
 from textual.containers import VerticalScroll
 from textual.widgets import Collapsible, Static
 
@@ -85,6 +86,9 @@ class Transcript(VerticalScroll):
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
+        #: Follow new content only while the reader is at the bottom. Scrolling
+        #: up releases it; scrolling back to the end (or a new message) re-arms it.
+        self.following = True
         self._text_block: Static | None = None
         self._text_buf = ""
         self._thinking_block: Static | None = None
@@ -95,7 +99,38 @@ class Transcript(VerticalScroll):
 
     def user(self, text: str) -> None:
         self._close_blocks()
+        self.following = True
         self._add(Static(Text(f"› {text}"), classes="user"))
+
+    # --- following ------------------------------------------------------------------
+
+    def _on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
+        self.following = False
+        super()._on_mouse_scroll_up(event)
+
+    def _on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
+        super()._on_mouse_scroll_down(event)
+        self.call_after_refresh(self._rearm_if_at_end)
+
+    def page_up(self) -> None:
+        self.following = False
+        self.scroll_page_up(animate=False)
+
+    def page_down(self) -> None:
+        self.scroll_page_down(animate=False)
+        self.call_after_refresh(self._rearm_if_at_end)
+
+    def follow(self) -> None:
+        self.following = True
+        self.scroll_end(animate=False)
+
+    def _rearm_if_at_end(self) -> None:
+        if self.scroll_y >= self.max_scroll_y - 1:
+            self.following = True
+
+    def _autoscroll(self) -> None:
+        if self.following:
+            self.scroll_end(animate=False)
 
     # --- events -------------------------------------------------------------------
 
@@ -173,13 +208,13 @@ class Transcript(VerticalScroll):
                 self._add(Static(Text("⏹ interrupted"), classes="notice warning"))
             case _:
                 return
-        self.scroll_end(animate=False)
+        self._autoscroll()
 
     # --- internals ----------------------------------------------------------------
 
     def _add(self, widget) -> None:
         self.mount(widget)
-        self.scroll_end(animate=False)
+        self._autoscroll()
 
     def _close_text(self) -> None:
         if self._text_block is not None and self._text_buf:

@@ -53,6 +53,7 @@ class StatusBar(Static):
         self.stage = ""
         self.cycle = 0
         self.model = ""
+        self.effort = ""
         self.busy = False
         self.cost = 0.0
 
@@ -60,6 +61,10 @@ class StatusBar(Static):
         if record is not None:
             self.session = record.name
             self.focus_name = record.focus
+        self.refresh_line()
+
+    def set_settings(self, model: str, effort: str) -> None:
+        self.model, self.effort = model, effort
         self.refresh_line()
 
     def set_busy(self, busy: bool) -> None:
@@ -83,4 +88,5 @@ class StatusBar(Static):
         graph = f"  cycle {self.cycle} · {self.stage}" if self.cycle else ""
         state = "⋯ working" if self.busy else "idle"
         cost = f"  ~${self.cost:.3f}" if self.cost else ""
-        self.update(Text(f"{self.session}  /{self.focus_name}{graph}  {self.model}{cost}  {state}   Esc interrupts · /help"))
+        effort = f" · {self.effort}" if self.effort else ""
+        self.update(Text(f"{self.session}  /{self.focus_name}{graph}  {self.model}{effort}{cost}  {state}   Esc interrupts · ctrl+g panel · /help"))

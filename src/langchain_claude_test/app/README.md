@@ -18,8 +18,21 @@ uv run langchain-claude-test --cwd /path/to/repo --model sonnet
 
 Plain text goes to the focused mode. `/graph <query>` starts a cycle; plain text while the
 focus is the graph continues its synthesis conversation; `/chat` leaves it. `/help` lists the
-rest. `Esc` interrupts the turn in flight. Modes come from `modes.toml` in the working
-directory: every table there is a `/<name>` command with its own system prompt and tools.
+rest. Modes come from `modes.toml` in the working directory: every table there is a `/<name>`
+command with its own system prompt and tools.
+
+| Key or command | Does |
+|---|---|
+| `Enter` / `Shift+Enter` (or `Ctrl+J`) | send / new line; the prompt wraps and grows to ten lines |
+| `Tab` | complete a `/` command; the line above the prompt lists the matches |
+| `Ctrl+A` | select all in the prompt (and in the approval modal's words box; approve there is `Ctrl+Y`, refuse `Ctrl+N`) |
+| `Esc` | interrupt the turn in flight |
+| `PageUp` / `PageDown` / `Ctrl+End` | scroll the transcript; scrolling up stops it following new output until you return to the end or send a message |
+| `Ctrl+G`, `Ctrl+Left`, `Ctrl+Right`, `/panel [show\|hide\|<width>]` , or drag the divider | hide, show and resize the graph panel |
+| `/model` | pick from the CLI's own model list (with its per-model effort levels); `/model <alias>` sets one directly |
+| `/effort` | pick the effort level; `/effort <level>` sets it. Chat reopens the same conversation at the new level |
+
+Model and effort are saved on the session and restored by `/resume`; a fork inherits them.
 
 ## Layout
 
