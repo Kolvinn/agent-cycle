@@ -11,6 +11,11 @@ details are written down so they can be argued with.
 
 ---
 
+> **Updated for the three-frame cycle.** The assume frame is gone: orientate surveys, keeps its
+> findings on the cycle's question (`q<cycle>`), and suggests the *assumptions* (the word
+> "reading" below means assumption). An assumption `cites` the survey findings it rests on.
+> `BUDGET CLOSED` in §4 no longer exists; nothing produces it.
+
 ## 1. What the graph is for
 
 > E48 "the networkx graph as basically a thought graph that is rooted in the user approval

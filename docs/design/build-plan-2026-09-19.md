@@ -359,6 +359,72 @@ Gated by stage. Each stage ends with a check that is run, not asserted.
 - [ ] E2 remove or archive `session/`, `ledger/`, `agentic-tui` (**Q5**).
 - [ ] E3 run log for the new loop (the `runlog.py` shape, pointed at the events).
 
+### Stage G — the assume frame folded into orientate (branch `orientate-absorbs-assume`)
+
+Your words: *"skip the whole assumption phase and put it into the orientate phase, but give the
+orientate agent more budget ... the prompt given to that agent represents how they should be not
+making decisions, just getting a clear overview and surface of the project context and how it
+might relate to the user questions, and then some suggested assumptions. They should be called
+assumptions, not readings. This immediately follows onto the antithesis agent."*
+
+- [x] G1 `nodes/assume.py` deleted; the edge list is orientate → antithesis → synthesis.
+- [x] G2 orientate carries `attach_finding`; every survey finding hangs off the cycle's
+      question (`q<cycle>`), since no assumption exists while the survey runs. An assumption
+      cites the findings it rests on by id (`evidence`); ids the survey never recorded are dropped.
+- [x] G3 the orientate pool is `orientation_base + per_assumption × max_assumptions` (5 + 5·3 =
+      20, `budget.orientation_budget`), fixed before any assumption exists. The asymmetry
+      disclosure says so. `orientation_points` renamed `orientation_base`; still provisional.
+- [x] G4 the brief rewritten in your terms: survey, keep, relate, suggest; no decisions.
+- [x] G5 "reading" → "assumption" in every brief, tool description, package section, thought
+      graph kind, panel label and summary. `Orientation.reading` → `overview`.
+- [x] G6 state loses `allocations`, `current_reading`, `reading_turns`, `assume_turns`,
+      `budget_closed`; package loses the BUDGET CLOSED section (nothing produced it any more).
+- [x] G7 tests rewritten for three frames (112 pass); spike 09 live on Haiku: 4 survey
+      findings on q1, 3 assumptions citing them, 3 rivals, one conversation, ~$0.22.
+
+- [x] G8 synthesis is text first: the opening exchange withholds the gated tools (off the
+      server, refused by the hook with "suggest it in text"); from the user's first reply on
+      they exist. Your words: *"it MUST go through some sort of text discussion phase first."*
+- [x] G9 `/budget <field> <n>` and `/prices <class> <n>` set the cycle's numbers from the
+      prompt, per session, from the next frame on; `reset` restores; a fork inherits them.
+- [x] G10 the TUI survives every terminal size: the panel hides before the main column can
+      reach zero width, and the prompt drops its placeholder when there is no room to wrap it.
+
+- [x] G11 `attach_finding(target, run, replace?)` runs one fenced read-only command
+      (`harness/evidence.py`: allow-list, no shell, cwd fence, timeout, 80-line cap), keeps
+      the output as the finding and returns it. Free; hard limit `max_findings` per turn;
+      `replace` overwrites a finding the same turn created, in place, not counted again.
+- [x] G12 `/graph` alone resumes an interrupted cycle from the frame it owes, with the
+      current caps and prices (`GraphDriver.resume` → `ainvoke(None)`); `/graph <query>`
+      abandons it with a warning.
+- [x] G13 step 2 of `thought-graph-v2-options-2026-09-19.md` §9, the store (S-2): the
+      graph lives in `sessions/graph/ops.jsonl` (`graph/store.py`), one locked append per
+      frame, replayed into a `Ledger` on read; thread state slimmed to the working set;
+      cycle numbers allocated from the log, so ids are unique across sessions and a fork
+      shares the graph (Q-7). Behaviour otherwise unchanged; 138 tests.
+- [x] G14 step 3 of §9, the model and the tools: `graph/vocabulary.py` (kinds, roles,
+      statuses, structural vs relational edges, closed core + approved additions);
+      operation records in `state.py` (NodeAdded, EdgeAdded, RelationKind, NodeUpdated,
+      EdgeUpdated, Tombstone, Merge, EvidenceMoved, Closure, Supersession, Compression);
+      `thought.build` = base then ops, `thought.apply` shared with the tools; the package
+      renders the applied view; the gate dry-runs a handler before asking. `discard` and
+      `promote_fact` are gone (`delete_node`; nothing ever parked). 140 tests.
+- [x] G15 steps 4–5 of §9: the package renders the neighbourhood (`package_hops`, seeded
+      by the facts, the question and what its words match) with one line per node beyond;
+      free `graph_search` / `graph_neighbours` on every frame and behind `/show`; compression
+      candidates (`stale_after`) in the synthesis brief each cycle; the panel is a browser
+      (outline / kind / status, select a node to see it in full); the approval modal shows
+      the handler's dry-run effect. Review fixes in the same pass: ids continue across a
+      retried attempt (`_common.Attempts`), a finding cannot attach to a node merged away in
+      the same turn, the store caches the built view, log line kinds are named.
+- [x] G16 cleanup: `graph_v2/`, `ledger/`, `session/`, `runlog.py`, `v3_test/`, their tests
+      and spikes 02–03 deleted; dependencies are what the app imports; a mode's prompt
+      `file` resolves beside the `modes.toml` that declared it, then in the package.
+
+Open for you: the assumptions the model suggests are still about *what you are asking* (its
+intent), as the old brief framed them. If you want them to be propositions about the project
+instead, that is one sentence in the brief.
+
 ---
 
 ## 7. Verified this session, with locators

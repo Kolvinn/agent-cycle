@@ -1,10 +1,9 @@
 """The application — a Claude shell whose commands switch between a plain Claude
 connection and the provenance cycle, over the Claude Agent SDK.
 
-This package is self-contained. It ports what was worth keeping from the earlier
-``graph_v2``, ``session`` and ``ledger`` packages and imports none of them, so
-that it can supersede them: *"what you do here supersedes everything else such
-that they can be deleted at the end."*
+This package is the whole application. It was built to supersede three earlier
+packages — *"what you do here supersedes everything else such that they can be
+deleted at the end"* — and they have been deleted.
 
 Layers, outermost first, and what each may know:
 
