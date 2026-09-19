@@ -1,0 +1,153 @@
+"""The shell, headless: commands, focus, sessions and forks, with the model
+scripted and the chat faked."""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+import pytest
+
+from langchain_claude_test.app.config import AppConfig, builtin_modes
+from langchain_claude_test.app.harness import events as ev
+from langchain_claude_test.app.harness.events import ListSink, TextDone
+from langchain_claude_test.app.harness.scripted import Call, ScriptedApprover, ScriptedHarness, Turn
+from langchain_claude_test.app.runner import Runner
+
+from .test_cycle import QUESTION, script
+
+PKG = Path(__file__).resolve().parents[2] / "src" / "langchain_claude_test" / "app"
+
+
+class FakeChat:
+    """Stands in for the SDK conversation: records what it was sent."""
+
+    instances: list["FakeChat"] = []
+
+    def __init__(self, runner, mode, resume):
+        self.mode = mode
+        self.resume = resume
+        self.sent: list[str] = []
+        self.sink = runner._session_sink
+        self.closed = False
+        self.session_id = resume or f"chat-{mode.name}-{len(FakeChat.instances) + 1}"
+        FakeChat.instances.append(self)
+
+    async def send(self, text: str) -> str:
+        self.sent.append(text)
+        self.sink.emit(TextDone(f"[{self.mode.name}] echo: {text}"))
+        return self.session_id
+
+    async def interrupt(self) -> None:
+        pass
+
+    async def set_model(self, model: str) -> None:
+        pass
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def make_runner(tmp_path: Path, harness: ScriptedHarness) -> tuple[Runner, ListSink]:
+    sink = ListSink()
+    config = AppConfig(cwd=tmp_path, sessions_dir=tmp_path / "sessions", modes=builtin_modes(PKG))
+    runner = Runner(
+        config=config,
+        sink=sink,
+        approver=harness.approver,
+        harness_factory=lambda r: harness,
+        chat_factory=FakeChat,
+    )
+    harness.sink = sink
+    return runner, sink
+
+
+async def drive(runner: Runner, *lines: str) -> None:
+    for line in lines:
+        runner.submit(line)
+    await runner.queue.join()
+
+
+def notices(sink: ListSink) -> list[str]:
+    return [e.text for e in sink.events if isinstance(e, ev.Notice)]
+
+
+@pytest.mark.asyncio
+async def test_focus_routes_plain_text_and_the_graph_runs_a_cycle(tmp_path: Path):
+    FakeChat.instances.clear()
+    harness = ScriptedHarness(script=script(), approver=ScriptedApprover())
+    runner, sink = make_runner(tmp_path, harness)
+    task = asyncio.create_task(runner.run("work"))
+    try:
+        await drive(runner, "hello there")
+        assert FakeChat.instances[0].sent == ["hello there"]
+        assert runner.session is not None and runner.session.conversations == {"chat": "chat-chat-1"}
+
+        await drive(runner, "/graph")
+        assert runner.session.focus == "graph"
+        await drive(runner, "in the graph but no cycle")
+        assert any("no conversation is open" in n for n in notices(sink))
+
+        await drive(runner, f"/graph {QUESTION}")
+        stages = [e.stage for e in sink.events if isinstance(e, ev.StageFinished)]
+        assert stages == ["orientate", "assume", "antithesis", "synthesis"]
+        snap = [e for e in sink.events if isinstance(e, ev.StateSnapshot)][-1]
+        assert snap.cycle == 1 and snap.stage == "synthesis"
+        assert any(pool == "assume:a1.1" and spent == 4 and cap == 5 for pool, spent, cap in snap.pools)
+
+        harness.queue("synthesis", Turn(payload={"text": "reply handled"}))
+        await drive(runner, "tell me more")
+        assert harness.requests[-1].stage == "synthesis" and harness.requests[-1].message == "tell me more"
+
+        await drive(runner, "/chat", "back in chat")
+        assert runner.session.focus == "chat"
+        assert FakeChat.instances[0].sent[-1] == "back in chat"
+
+        await drive(runner, "/compact")
+        assert FakeChat.instances[0].sent[-1] == "/compact"
+        await drive(runner, "/graph", "/compact")
+        assert any("leave the graph" in n for n in notices(sink))
+
+        await drive(runner, "/show budget")
+        assert any("assume:a1.1: 4 of 5" in n for n in notices(sink))
+        await drive(runner, "/nonsense")
+        assert any("unknown command /nonsense" in n for n in notices(sink))
+    finally:
+        await runner.stop()
+        await task
+    assert FakeChat.instances[0].closed
+
+
+@pytest.mark.asyncio
+async def test_sessions_fork_and_resume_carry_the_graph(tmp_path: Path):
+    FakeChat.instances.clear()
+    harness = ScriptedHarness(script=script(), approver=ScriptedApprover())
+    runner, sink = make_runner(tmp_path, harness)
+    task = asyncio.create_task(runner.run("one"))
+    try:
+        await drive(runner, f"/graph {QUESTION}")
+        await drive(runner, "/fork two")
+        assert runner.session is not None and runner.session.name == "two"
+        assert runner.session.forked_from == "one" and runner.session.focus == "graph"
+        state = await runner._graph.state()
+        assert state is not None and state.cycle == 1 and state.fork_conversation is True
+        assert [a.id for a in state.assumptions] == ["a1.1", "a1.2"]
+
+        # the fork's next exchange forks the SDK conversation; the original does not
+        harness.queue("synthesis", Turn(payload={"text": "in the fork"}))
+        await drive(runner, "go on")
+        assert harness.requests[-1].fork is True
+        await drive(runner, "/resume one")
+        assert runner.session.name == "one"
+        harness.queue("synthesis", Turn(payload={"text": "in the original"}))
+        await drive(runner, "go on")
+        assert harness.requests[-1].fork is False and harness.requests[-1].conversation == "scripted-1"
+
+        await drive(runner, "/sessions")
+        listing = notices(sink)[-1]
+        assert "one" in listing and "two" in listing and "(current)" in listing
+        await drive(runner, "/new three")
+        assert runner.session.name == "three" and runner.session.focus == "chat"
+    finally:
+        await runner.stop()
+        await task

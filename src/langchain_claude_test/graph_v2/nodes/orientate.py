@@ -10,7 +10,7 @@ from langgraph.runtime import Runtime
 from langchain_claude_test.graph_v2 import budget, package
 from langchain_claude_test.graph_v2.context import ControlContext
 from langchain_claude_test.graph_v2.harness import StageRequest
-from langchain_claude_test.graph_v2.state import Assumption, Cycle
+from langchain_claude_test.graph_v2.state import Assumption, GraphState
 from langchain_claude_test.graph_v2.surface import available
 
 NAME = "orientate"
@@ -104,7 +104,7 @@ def orientation_payload(ceiling: int):
     ...
 
 
-async def orientate(state: Cycle, runtime: Runtime[ControlContext]) -> dict:
+async def orientate(state: GraphState, runtime: Runtime[ControlContext]) -> dict:
     """Read the landscape against what was asked, and author the readings.
 
     **Reads:** the user's request, and nothing else. The graph is the state and

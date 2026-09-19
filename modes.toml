@@ -1,0 +1,23 @@
+# The / commands that switch focus. Each table is a mode; `/<name>` enters it.
+#
+# `chat` and `graph` exist without this file. Anything defined here is added
+# to (or overrides) those two. Keys per mode:
+#
+#   kind          = "agent" (a plain Claude connection) | "graph" (the cycle)
+#   description   = shown by /help and /modes
+#   system_prompt = "preset"                                   Claude Code's own prompt
+#                 | "inline text..."                           a custom prompt
+#                 | { preset = "claude_code", append = "..." } the preset, extended
+#                 | { file = "relative/path.md" }              a prompt file
+#   tools         = ["Read", "Glob", "Grep"]                    an allow-list of built-ins
+#   allowed_tools = ["Read"]                                    never prompt for these
+#   model         = "haiku"                                     override the session model
+
+default = "chat"
+
+[modes.reviewer]
+kind = "agent"
+description = "Read-only reviewer: looks, reports, changes nothing."
+system_prompt = { preset = "claude_code", append = "You are reviewing this repository. You may read and search but you must not change anything. Report what you find with file and line references, and say plainly what you did not look at." }
+tools = ["Read", "Glob", "Grep", "WebFetch"]
+allowed_tools = ["Read", "Glob", "Grep"]

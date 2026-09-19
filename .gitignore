@@ -12,3 +12,6 @@ wheels/
 # Run artefacts (inspectable logs; regenerated per run)
 runs/
 agent_framework
+
+# App sessions (checkpoints, session metadata, event logs)
+sessions/

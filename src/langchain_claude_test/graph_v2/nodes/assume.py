@@ -34,7 +34,7 @@ from langgraph.runtime import Runtime
 from langchain_claude_test.graph_v2 import budget
 from langchain_claude_test.graph_v2.context import ControlContext
 from langchain_claude_test.graph_v2.harness import StageRequest
-from langchain_claude_test.graph_v2.state import Cycle, Reasoning
+from langchain_claude_test.graph_v2.state import GraphState, Reasoning
 from langchain_claude_test.graph_v2.surface import available
 
 NAME = "assume"
@@ -120,7 +120,7 @@ def assume_payload():
 # ---------------------------------------------------------------------------
 
 
-def can_still_buy(state: Cycle, reading_id: str) -> bool:
+def can_still_buy(state: GraphState, reading_id: str) -> bool:
     """Whether this reading has points left and has not closed itself.
 
     A reading leaves the queue two ways, and both are needed. It runs out, which
@@ -136,7 +136,7 @@ def can_still_buy(state: Cycle, reading_id: str) -> bool:
     return budget.remaining(state.spend, pool, state.allocations.get(reading_id, 0)) > 0
 
 
-def open_readings(state: Cycle) -> tuple[str, ...]:
+def open_readings(state: GraphState) -> tuple[str, ...]:
     """Every reading of **this cycle** that could still buy something, in order.
 
     This cycle's, not every reading ever authored. Answering a report starts a
@@ -154,7 +154,7 @@ def open_readings(state: Cycle) -> tuple[str, ...]:
 # ---------------------------------------------------------------------------
 
 
-def select(state: Cycle, runtime: Runtime[ControlContext]) -> dict:
+def select(state: GraphState, runtime: Runtime[ControlContext]) -> dict:
     """Take the next open reading. No model call, no spend.
 
     Its own node because the reading boundary is the place a run is worth
@@ -174,7 +174,7 @@ def select(state: Cycle, runtime: Runtime[ControlContext]) -> dict:
 # ---------------------------------------------------------------------------
 
 
-async def investigate(state: Cycle, runtime: Runtime[ControlContext]) -> dict:
+async def investigate(state: GraphState, runtime: Runtime[ControlContext]) -> dict:
     """Spend on the selected reading, for one turn.
 
     **Continues the conversation, and says as little as it can.** The full
@@ -281,7 +281,7 @@ async def investigate(state: Cycle, runtime: Runtime[ControlContext]) -> dict:
     }
 
 
-def more_to_do(state: Cycle, runtime: Runtime[ControlContext]) -> Literal["investigate", "select", "__end__"]:
+def more_to_do(state: GraphState, runtime: Runtime[ControlContext]) -> Literal["investigate", "select", "__end__"]:
     """Both loop conditions, asked in order. Inner first, then outer.
 
     Inner first because staying on a reading is the cheaper answer: the model is
@@ -296,7 +296,7 @@ def more_to_do(state: Cycle, runtime: Runtime[ControlContext]) -> Literal["inves
 
 def build() -> StateGraph:
     """The subgraph. Two nodes, two loops, one exit."""
-    builder: StateGraph = StateGraph(Cycle, context_schema=ControlContext)
+    builder: StateGraph = StateGraph(GraphState, context_schema=ControlContext)
     builder.add_node(SELECT, select)
     builder.add_node(INVESTIGATE, investigate)
     builder.add_edge(START, SELECT)
@@ -309,12 +309,12 @@ def build() -> StateGraph:
 #: a channel added later is handled without anyone remembering to come here.
 ACCUMULATING: tuple[str, ...] = tuple(
     name
-    for name, f in Cycle.model_fields.items()
+    for name, f in GraphState.model_fields.items()
     if any(callable(m) for m in f.metadata)
 )
 
 
-async def assume(state: Cycle, runtime: Runtime[ControlContext]) -> dict:
+async def assume(state: GraphState, runtime: Runtime[ControlContext]) -> dict:
     """The frame, as the parent graph sees it: one node, and it returns a delta.
 
     **The subgraph is invoked from inside this node rather than attached as one,
@@ -342,7 +342,7 @@ async def assume(state: Cycle, runtime: Runtime[ControlContext]) -> dict:
     finished = await _COMPILED.ainvoke(state, context=runtime.context)
 
     delta: dict = {}
-    for name in Cycle.model_fields:
+    for name in GraphState.model_fields:
         value = finished[name]
         if name in ACCUMULATING:
             already = len(getattr(state, name))

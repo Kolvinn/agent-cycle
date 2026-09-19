@@ -28,7 +28,7 @@ from langgraph.runtime import Runtime
 from langchain_claude_test.graph_v2 import budget
 from langchain_claude_test.graph_v2.context import ControlContext
 from langchain_claude_test.graph_v2.harness import StageRequest
-from langchain_claude_test.graph_v2.state import Cycle, Reasoning
+from langchain_claude_test.graph_v2.state import GraphState, Reasoning
 from langchain_claude_test.graph_v2.surface import available
 
 NAME = "synthesis"
@@ -90,7 +90,7 @@ def synthesis_payload():
     ...
 
 
-async def synthesis(state: Cycle, runtime: Runtime[ControlContext]) -> dict:
+async def synthesis(state: GraphState, runtime: Runtime[ControlContext]) -> dict:
     """One exchange of the conversation.
 
     **Carries the widest surface in the cycle, and that is the point of the

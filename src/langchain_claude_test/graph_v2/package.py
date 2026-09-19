@@ -36,7 +36,7 @@ renders the whole graph, which is the wrong end of the failure: it grows.
 
 from __future__ import annotations
 
-from .state import Cycle
+from .state import GraphState
 
 #: What a node's evidence is indented under it as. Not markdown — the package is
 #: read by a model as context, and a heading level is a claim about structure
@@ -50,7 +50,7 @@ def _quote(text: str, limit: int = 240) -> str:
     return flat if len(flat) <= limit else flat[: limit - 1] + "…"
 
 
-def render(state: Cycle) -> str:
+def render(state: GraphState) -> str:
     """The graph as the text a cycle opens with.
 
     Empty when there is nothing yet, which is the first cycle: there is no
@@ -110,7 +110,7 @@ def render(state: Cycle) -> str:
     return "\n\n".join(blocks)
 
 
-def opening(state: Cycle, prompt: str) -> str:
+def opening(state: GraphState, prompt: str) -> str:
     """The first message of a cycle: the carried graph, then what is being asked.
 
     In that order, and not the other way round. The graph is the stable part —

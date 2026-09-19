@@ -67,7 +67,7 @@ from langgraph.graph import END, START, StateGraph
 
 from .context import ControlContext
 from .nodes import antithesis, assume, orientate, synthesis
-from .state import RECORD_TYPES, Cycle, unlisted_record_types
+from .state import RECORD_TYPES, GraphState, unlisted_record_types
 
 ORIENTATE = orientate.NAME
 ASSUME = assume.NAME
@@ -81,7 +81,7 @@ SYNTHESIS = synthesis.NAME
 SPENDING = frozenset({ORIENTATE, ASSUME, ANTITHESIS, SYNTHESIS})
 
 
-def entry(state: Cycle) -> Literal["orientate", "synthesis"]:
+def entry(state: GraphState) -> Literal["orientate", "synthesis"]:
     """The cycle pointer. Which frame this run enters at.
 
     The whole of the control you have over the loop, in four lines. While the
@@ -114,7 +114,7 @@ def build() -> StateGraph:
     Approval happens at the call, inside the turn, where the model can hear the
     answer.
     """
-    builder: StateGraph = StateGraph(Cycle, context_schema=ControlContext)
+    builder: StateGraph = StateGraph(GraphState, context_schema=ControlContext)
 
     builder.add_node(ORIENTATE, orientate.orientate)
     # One node from out here; two nodes and two loops on the inside. The inner

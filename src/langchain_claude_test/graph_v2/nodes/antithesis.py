@@ -21,7 +21,7 @@ from langgraph.runtime import Runtime
 from langchain_claude_test.graph_v2 import budget
 from langchain_claude_test.graph_v2.context import ControlContext
 from langchain_claude_test.graph_v2.harness import StageRequest
-from langchain_claude_test.graph_v2.state import Antithesis, Cycle, Reasoning
+from langchain_claude_test.graph_v2.state import Antithesis, GraphState, Reasoning
 from langchain_claude_test.graph_v2.surface import available
 
 NAME = "antithesis"
@@ -94,7 +94,7 @@ def antithesis_payload():
     ...
 
 
-async def antithesis(state: Cycle, runtime: Runtime[ControlContext]) -> dict:
+async def antithesis(state: GraphState, runtime: Runtime[ControlContext]) -> dict:
     """Author the reading all N miss, and spend against the case.
 
     **Continues the conversation.** Everything the case gathered and everything it

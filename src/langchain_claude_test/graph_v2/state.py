@@ -345,7 +345,7 @@ class Decision(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class Cycle(BaseModel):
+class GraphState(BaseModel):
     """One cycle: four frames, one ledger, and everything the ones before left.
 
     Field order follows the flow, so reading the class top to bottom is reading
@@ -509,7 +509,7 @@ RECORD_TYPES: tuple[type[BaseModel], ...] = (
     SpendEntry,
     ProposedWrite,
     Decision,
-    Cycle,
+    GraphState,
 )
 
 

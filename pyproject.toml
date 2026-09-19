@@ -8,13 +8,16 @@ dependencies = [
     "agentic-tui>=0.3.0",
     "langchain>=1.4.0",
     "langchain-claude-cli>=1.2.1",
+    "langgraph-checkpoint-sqlite>=3.1.1",
     "networkx>=3.6.1",
     "pillow>=12.3.0",
     "pygments>=2.21.0",
+    "textual>=8.2.8",
+    "textual-dev>=1.8.0",
 ]
 
 [project.scripts]
-langchain-claude-test = "langchain_claude_test:main"
+langchain-claude-test = "langchain_claude_test.app:main"
 
 [build-system]
 requires = ["uv_build>=0.12.15,<0.13.0"]
@@ -24,6 +27,7 @@ build-backend = "uv_build"
 dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "trafilatura>=2.2.0",
 ]
 
 [tool.pytest.ini_options]

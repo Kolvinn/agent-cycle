@@ -46,7 +46,7 @@ from .harness import (
     UnbuiltHarness,
     Verdict,
 )
-from .state import Cycle
+from .state import GraphState
 
 __all__ = [
     "Approver",
@@ -54,7 +54,7 @@ __all__ = [
     "Budgets",
     "CallGate",
     "ControlContext",
-    "Cycle",
+    "GraphState",
     "NobodyApproves",
     "StageHarness",
     "StageRequest",
