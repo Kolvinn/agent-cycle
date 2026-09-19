@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from rich.text import Text
 from textual.app import App, ComposeResult
-from textual.widgets import Static
 
 from langchain_claude_test.app.harness import events as ev
 from langchain_claude_test.app.tui.prompt import PromptInput

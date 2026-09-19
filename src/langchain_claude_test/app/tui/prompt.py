@@ -39,7 +39,8 @@ class PromptInput(TextArea):
     def __init__(self, suggestions: tuple[str, ...] = (), **kwargs) -> None:
         super().__init__(soft_wrap=True, show_line_numbers=False, tab_behavior="focus", **kwargs)
         self.suggestions = tuple(sorted(suggestions))
-        self.placeholder = "message, or /command  (/help)  ·  shift+enter for a new line"
+        self._placeholder_text = "message, or /command  (/help)  ·  shift+enter for a new line"
+        self.placeholder = self._placeholder_text
 
     # --- the value, as the old single-line Input exposed it ------------------
 
@@ -107,6 +108,9 @@ class PromptInput(TextArea):
         self.post_message(self.HintChanged(self.matches()))
 
     def _on_resize(self, event: events.Resize) -> None:
+        # Textual wraps the placeholder to the content width and cannot wrap to
+        # zero, so the placeholder goes away whenever there is no room for it.
+        self.placeholder = self._placeholder_text if self.content_size.width > 0 else ""
         self._fit()
 
     def _fit(self) -> None:

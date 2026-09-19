@@ -47,13 +47,36 @@ async def test_app_runs_a_scripted_cycle_and_draws_it(tmp_path: Path):
         await app.runner.queue.join()
         await pilot.pause(0.3)
         stages = [plain(w) for w in app.transcript.query(".stage")]
-        assert [s.split(" · ")[0] for s in stages] == ["── orientate", "── assume", "── antithesis", "── synthesis"]
+        assert [s.split(" · ")[0] for s in stages] == ["── orientate", "── antithesis", "── synthesis"]
         blocks = list(app.transcript.query(ToolBlock))
         assert any("Read" in b.title for b in blocks)
         assert any("refused" in b.title for b in blocks)  # the Bash call
         assert app.panel.graph_tree.root.label.plain.startswith("cycle 1")
-        assert "assume:a1.1: 4/5" in plain(app.panel.pools)
+        assert "orientation:1: 5/20" in plain(app.panel.pools)
         assert "cycle 1" in plain(app.status)
+
+        # the browser: three views of the same snapshot, and a picked node shown in full
+        await pilot.press("ctrl+b")
+        assert "by kind" in app.panel.graph_tree.root.label.plain
+        branches = [str(n.label) for n in app.panel.graph_tree.root.children]
+        assert any(b.startswith("claim/assumption (2)") for b in branches) and any(b.startswith("evidence (") for b in branches)
+        app.input.value = "/panel view status"
+        await pilot.press("enter")
+        await app.runner.queue.join()
+        await pilot.pause(0.2)
+        assert "by status" in app.panel.graph_tree.root.label.plain
+        assert any(str(n.label).startswith("provisional (") for n in app.panel.graph_tree.root.children)
+        app.panel.pick("a1.1")
+        await pilot.pause(0.2)
+        await app.runner.queue.join()
+        await pilot.pause(0.2)
+        shown = [plain(w) for w in app.transcript.query(".notice")]
+        assert any(t.startswith("assumption a1.1:") and "← asks q1" in t for t in shown)
+        app.input.value = "/panel view outline"
+        await pilot.press("enter")
+        await app.runner.queue.join()
+        await pilot.pause(0.2)
+        assert "by outline" in app.panel.graph_tree.root.label.plain
 
         app.input.value = "/chat"
         await pilot.press("enter")
@@ -111,3 +134,45 @@ async def test_dragging_the_divider_resizes_the_panel(tmp_path: Path):
         assert app.divider.region.x == 120 - 60 - 1
         await pilot.press("ctrl+g")
         assert not app.divider.display
+
+
+@pytest.mark.asyncio
+async def test_every_terminal_size_renders_and_resizes_without_crashing(tmp_path: Path):
+    """The panel hides itself before the main column can reach zero width, and
+    the prompt drops its placeholder when there is no room to wrap it."""
+    from langchain_claude_test.app.harness import events as ev
+    from langchain_claude_test.app.harness.protocol import ApprovalRequest
+    from langchain_claude_test.app.tui.screens import ApprovalScreen, ChoiceScreen
+
+    FakeChat.instances.clear()
+    config = AppConfig(cwd=tmp_path, sessions_dir=tmp_path / "sessions", modes=builtin_modes(PKG))
+    for size in [(120, 40), (41, 10), (30, 8), (12, 6), (4, 3), (1, 1)]:
+        app = ProvenanceApp(config, f"size{size[0]}x{size[1]}")
+        app.runner._harness_factory = lambda r: ScriptedHarness(script=script(), approver=ScriptedApprover())
+        app.runner._chat_factory = FakeChat
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause(0.1)
+            app.transcript.apply(ev.Notice(text="a notice " * 20))
+            app.transcript.apply(ev.ToolStarted(tool_use_id="t1", name="Read"))
+            app.transcript.apply(ev.ToolCalled(tool_use_id="t1", name="Read", input={"file_path": "x" * 80}))
+            app.transcript.apply(ev.ToolResult(tool_use_id="t1", text="line\n" * 30, is_error=False))
+            app.transcript.apply(ev.TextDelta(text="streaming " * 30))
+            app.input.value = "typed text that is longer than any narrow terminal could hold on one line"
+            for width, height in [(200, 50), (30, 8), (10, 4), (2, 2), (1, 1), (80, 24)]:
+                await pilot.resize_terminal(width, height)
+                await pilot.pause(0.05)
+                assert app.size.width - (app.panel.size.width if app.panel_visible else 0) >= min(app.size.width, 24)
+            app.push_screen(ApprovalScreen(ApprovalRequest(kind="alteration", tool_use_id="t9", name="close_node", input={"target": "a1.1"}, title="close a1.1", description="d")))
+            await pilot.pause(0.05)
+            await pilot.resize_terminal(3, 3)
+            await pilot.pause(0.05)
+            await pilot.press("ctrl+n")
+            app.push_screen(ChoiceScreen("Model", [("a", "A"), ("b", "B")], current="a"))
+            await pilot.pause(0.05)
+            await pilot.resize_terminal(2, 2)
+            await pilot.pause(0.05)
+            await pilot.press("escape")
+            await pilot.resize_terminal(100, 30)
+            await pilot.pause(0.05)
+            assert app.panel_visible
+        assert app.return_code in (None, 0)

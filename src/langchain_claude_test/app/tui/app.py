@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -22,6 +23,17 @@ from .screens import TuiApprover
 from .transcript import Transcript
 
 PANEL_MIN, PANEL_MAX, PANEL_STEP, PANEL_DEFAULT = 20, 100, 6, 40
+#: The transcript and prompt never get narrower than this; the panel hides
+#: itself first. Below it the widgets would be asked to wrap to nothing.
+MAIN_MIN = 24
+
+
+class Body(Horizontal):
+    """The columns. The app itself is not told about terminal resizes, so the
+    container that lays the columns out is what refits the panel."""
+
+    def on_resize(self, event: events.Resize) -> None:
+        self.app._fit_panel()  # type: ignore[attr-defined]
 
 
 class HarnessEventMessage(Message):
@@ -45,7 +57,7 @@ class ProvenanceApp(App[None]):
     CSS = """
     Screen { layout: vertical; }
     #body { height: 1fr; }
-    #main { width: 1fr; }
+    #main { width: 1fr; min-width: 24; }
     #transcript { height: 1fr; }
     #hint { height: auto; color: $text-muted; padding: 0 2; }
     #hint.empty { display: none; }
@@ -56,6 +68,7 @@ class ProvenanceApp(App[None]):
         Binding("escape", "interrupt", "Interrupt", priority=True),
         Binding("ctrl+q", "quit", "Quit", priority=True),
         Binding("ctrl+g", "toggle_panel", "Graph panel", priority=True),
+        Binding("ctrl+b", "cycle_view", "Browser view", priority=True),
         Binding("ctrl+left", "panel_wider", "Wider panel", priority=True),
         Binding("ctrl+right", "panel_narrower", "Narrower panel", priority=True),
         Binding("pageup", "page_up", "Scroll up", priority=True),
@@ -76,13 +89,14 @@ class ProvenanceApp(App[None]):
         self.transcript = Transcript(id="transcript")
         self.panel = GraphPanel(id="panel")
         self.panel_width = PANEL_DEFAULT
+        self.panel_wanted = True
         self.divider = Divider(self.resize_panel, id="divider")
         self.status = StatusBar(id="status")
         self.input = PromptInput(self.runner.commands.suggestions(), id="input")
         self.hint = Static("", id="hint", classes="empty")
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="body"):
+        with Body(id="body"):
             with Vertical(id="main"):
                 yield self.transcript
                 yield self.hint
@@ -92,6 +106,7 @@ class ProvenanceApp(App[None]):
         yield self.status
 
     def on_mount(self) -> None:
+        self._fit_panel()
         self.input.focus()
         self.status.set_busy(False)
         self.run_worker(self._run_runner(), exclusive=True, name="runner")
@@ -142,13 +157,23 @@ class ProvenanceApp(App[None]):
         return not self.panel.has_class("hidden")
 
     def show_panel(self, visible: bool) -> None:
-        self.panel.set_class(not visible, "hidden")
-        self.divider.set_class(not visible, "hidden")
+        self.panel_wanted = visible
+        self._fit_panel()
 
     def resize_panel(self, width: int) -> None:
         self.panel_width = max(PANEL_MIN, min(PANEL_MAX, width))
-        self.panel.styles.width = self.panel_width
-        self.show_panel(True)
+        self.panel_wanted = True
+        self._fit_panel()
+
+    def _fit_panel(self) -> None:
+        """Show the panel at the wanted width only where the main column keeps
+        its minimum; otherwise hide it until the terminal is wide enough."""
+        room = self.size.width - MAIN_MIN - 1  # one column for the divider
+        visible = self.panel_wanted and room >= PANEL_MIN
+        if visible:
+            self.panel.styles.width = min(self.panel_width, room)
+        self.panel.set_class(not visible, "hidden")
+        self.divider.set_class(not visible, "hidden")
 
     def action_toggle_panel(self) -> None:
         self.show_panel(not self.panel_visible)
@@ -158,6 +183,10 @@ class ProvenanceApp(App[None]):
 
     def action_panel_narrower(self) -> None:
         self.resize_panel(self.panel_width - PANEL_STEP)
+
+    def action_cycle_view(self) -> None:
+        self.show_panel(True)
+        self.panel.cycle_view()
 
     def _panel_command(self, args: str) -> None:
         arg = args.strip().lower()
@@ -169,8 +198,18 @@ class ProvenanceApp(App[None]):
             self.show_panel(False)
         elif arg.isdigit():
             self.resize_panel(int(arg))
+        elif arg.startswith("view"):
+            wanted = arg.removeprefix("view").strip()
+            if wanted and self.panel.set_view(wanted):
+                self.show_panel(True)
+            else:
+                self.transcript.apply(ev.Notice(text="usage: /panel view outline|kind|status", level="warning"))
         else:
-            self.transcript.apply(ev.Notice(text="usage: /panel [show|hide|<width>]", level="warning"))
+            self.transcript.apply(ev.Notice(text="usage: /panel [show|hide|<width>|view <outline|kind|status>]", level="warning"))
+
+    def on_graph_panel_node_picked(self, message: GraphPanel.NodePicked) -> None:
+        """A node selected in the browser is shown in full in the transcript."""
+        self.runner.submit(f"/show node {message.node_id}")
 
     # --- events ---------------------------------------------------------------------
 
