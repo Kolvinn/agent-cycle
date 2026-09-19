@@ -16,7 +16,7 @@ already spent to zero by the first.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 
 from ..config import UNKNOWN_CALL_PRICE, Budgets
 from .state import SpendEntry
@@ -24,11 +24,6 @@ from .state import SpendEntry
 
 def orientation_pool(cycle: int) -> str:
     return f"orientation:{cycle}"
-
-
-def assumption_pool(assumption_id: str) -> str:
-    """Cycle-scoped already: ids are ``a<cycle>.<position>``."""
-    return f"assume:{assumption_id}"
 
 
 def antithesis_pool(cycle: int) -> str:
@@ -56,22 +51,25 @@ def affordable(spend: Iterable[SpendEntry], pool: str, cap: int, price: int) -> 
     return price <= remaining(spend, pool, cap)
 
 
-def allocate(assumption_ids: Sequence[str], budgets: Budgets) -> dict[str, int]:
-    """Flat, never weighted: cost may not attach to the direction of a conclusion."""
-    return {aid: budgets.per_assumption for aid in assumption_ids}
+def orientation_budget(budgets: Budgets) -> int:
+    """The survey's pool: its own base plus the allowance of every assumption it
+    may name. Flat, never weighted, and fixed before any assumption exists, so
+    cost cannot attach to the direction of a conclusion."""
+    return budgets.orientation_base + budgets.per_assumption * budgets.max_assumptions
 
 
 def antithesis_budget(n_assumptions: int, budgets: Budgets) -> int:
-    """``base + N``. With three readings and base 5, that is 8."""
+    """``base + N``. With three assumptions and base 5, that is 8."""
     return budgets.antithesis_base + n_assumptions
 
 
-def thesis_budget(n_assumptions: int, budgets: Budgets) -> int:
-    return budgets.per_assumption * n_assumptions
+def thesis_budget(budgets: Budgets) -> int:
+    """What funded the affirming side: the whole of the orientate pool."""
+    return orientation_budget(budgets)
 
 
 def cycle_total(n_assumptions: int, budgets: Budgets) -> int:
-    return thesis_budget(n_assumptions, budgets) + antithesis_budget(n_assumptions, budgets)
+    return thesis_budget(budgets) + antithesis_budget(n_assumptions, budgets) + budgets.synthesis_points
 
 
 def asymmetry_disclosure(n_assumptions: int, budgets: Budgets) -> str:
@@ -80,14 +78,14 @@ def asymmetry_disclosure(n_assumptions: int, budgets: Budgets) -> str:
     A lopsided evidence set reads as a conclusion; unless the report says the
     budgets were asymmetric, the budget design does the concluding.
     """
-    thesis = thesis_budget(n_assumptions, budgets)
+    thesis = thesis_budget(budgets)
     anti = antithesis_budget(n_assumptions, budgets)
     return (
-        f"Budgets were asymmetric by design: {thesis} points funded the {n_assumptions} "
-        f"reading(s) and {anti} funded the {n_assumptions} rival(s) together "
-        f"({budgets.antithesis_base} base + {n_assumptions}). More evidence was gathered "
-        f"for these readings than against them because building a case costs more than "
-        f"finding one hole — not because the evidence fell that way."
+        f"Budgets were asymmetric by design: {thesis} points funded the survey that "
+        f"produced the {n_assumptions} assumption(s) and {anti} funded the {n_assumptions} "
+        f"rival(s) together ({budgets.antithesis_base} base + {n_assumptions}). More was "
+        f"gathered around these assumptions than against them because surveying costs "
+        f"more than finding one hole — not because the evidence fell that way."
     )
 
 

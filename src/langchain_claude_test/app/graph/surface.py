@@ -25,10 +25,10 @@ from typing import Literal, Mapping
 
 from ..config import EVIDENCE_TOOLS
 
-#: The four frames.
-Stage = Literal["orientate", "assume", "antithesis", "synthesis"]
+#: The three frames.
+Stage = Literal["orientate", "antithesis", "synthesis"]
 
-STAGES: tuple[Stage, ...] = ("orientate", "assume", "antithesis", "synthesis")
+STAGES: tuple[Stage, ...] = ("orientate", "antithesis", "synthesis")
 
 #: The in-process tools that change the store. The server they live on is
 #: named so the wire name is ``mcp__graph__<tool>``.
@@ -37,23 +37,45 @@ GRAPH_SERVER = "graph"
 #: The one ungated write: a finding claims no authority.
 FINDING_TOOLS: frozenset[str] = frozenset({"attach_finding"})
 
-#: The authority-bearing calls, answered by the user at the call.
+#: Ungated growth: a new entity or claim is born provisional and claims
+#: nothing, exactly as an assumption does. (Growth option G-2.)
+GROWTH_TOOLS: frozenset[str] = frozenset({"add_node"})
+
+#: The authority-bearing calls, answered by the user at the call: every
+#: relational edge, every edit of an existing node or edge, every merge,
+#: move, delete, verdict and compression.
 GATED_TOOLS: frozenset[str] = frozenset(
-    {"propose_fact", "promote_fact", "close_node", "supersede", "compress", "discard"}
+    {
+        "propose_fact",
+        "add_edge",
+        "update_node",
+        "update_edge",
+        "delete_node",
+        "delete_edge",
+        "merge",
+        "move_evidence",
+        "close_node",
+        "supersede",
+        "compress",
+    }
 )
 
-ALTERATION_TOOLS: frozenset[str] = FINDING_TOOLS | GATED_TOOLS
+ALTERATION_TOOLS: frozenset[str] = FINDING_TOOLS | GROWTH_TOOLS | GATED_TOOLS
+
+#: Reading the graph is free: it is our text, already paid for (Q-8).
+READ_TOOLS: frozenset[str] = frozenset({"graph_search", "graph_neighbours"})
+
+GRAPH_TOOLS: frozenset[str] = ALTERATION_TOOLS | READ_TOOLS
 
 #: Per frame: which built-ins exist, and which in-graph tools exist.
 #:
-#: ``orientate`` is a reader: it looks and returns what it read on its answer.
-#: ``assume`` and ``antithesis`` gather evidence and register it, and cannot
-#: promote what they find. ``synthesis`` holds everything: it is a conversation
+#: ``orientate`` surveys and keeps what it read as findings on the question,
+#: and names the entities it found. ``antithesis`` gathers evidence against
+#: the assumptions. Neither can alter what exists. ``synthesis`` holds everything: it is a conversation
 #: with the user, in which what the graph becomes is decided together.
 STAGE_BUILTINS: Mapping[Stage, tuple[str, ...]] = MappingProxyType(
     {
         "orientate": EVIDENCE_TOOLS,
-        "assume": EVIDENCE_TOOLS,
         "antithesis": EVIDENCE_TOOLS,
         "synthesis": EVIDENCE_TOOLS,
     }
@@ -61,10 +83,11 @@ STAGE_BUILTINS: Mapping[Stage, tuple[str, ...]] = MappingProxyType(
 
 STAGE_GRAPH_TOOLS: Mapping[Stage, frozenset[str]] = MappingProxyType(
     {
-        "orientate": frozenset(),
-        "assume": FINDING_TOOLS,
-        "antithesis": FINDING_TOOLS,
-        "synthesis": FINDING_TOOLS | GATED_TOOLS,
+        # The surveying frames grow the graph (findings, entities, claims) and
+        # may put a relation to the user; nothing else of theirs waits.
+        "orientate": READ_TOOLS | FINDING_TOOLS | GROWTH_TOOLS | {"add_edge"},
+        "antithesis": READ_TOOLS | FINDING_TOOLS | GROWTH_TOOLS | {"add_edge"},
+        "synthesis": READ_TOOLS | ALTERATION_TOOLS,
     }
 )
 
@@ -84,7 +107,13 @@ def gated(tool_name: str) -> bool:
     return bare_name(tool_name) in GATED_TOOLS
 
 
-def available(stage: Stage, tool_name: str) -> bool:
-    """Whether a call to this tool exists in this frame."""
+def available(stage: Stage, tool_name: str, withheld: frozenset[str] = frozenset()) -> bool:
+    """Whether a call to this tool exists in this frame, on this turn.
+
+    ``withheld`` names in-graph tools the frame has taken off the surface for
+    one turn — how synthesis keeps its opening exchange to text.
+    """
     bare = bare_name(tool_name)
+    if bare in withheld:
+        return False
     return bare in STAGE_BUILTINS[stage] or bare in STAGE_GRAPH_TOOLS[stage]

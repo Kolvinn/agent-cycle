@@ -1,4 +1,4 @@
-"""The control graph: four frames, one state, and a pointer the user controls.
+"""The control graph: three frames, one state, and a pointer the user controls.
 
 **The entry is conditional, and that is the cycle pointer.** Every message the
 user sends is its own run. While the pointer reads ``synthesis`` the run
@@ -24,12 +24,11 @@ from typing import AsyncIterator, Literal
 from langgraph.graph import END, START, StateGraph
 
 from .context import ControlContext
-from .nodes import antithesis, assume, orientate, synthesis
+from .nodes import antithesis, orientate, synthesis
 from .state import RECORD_TYPES, GraphState, unlisted_record_types
 from .surface import STAGES
 
 ORIENTATE = orientate.NAME
-ASSUME = assume.NAME
 ANTITHESIS = antithesis.NAME
 SYNTHESIS = synthesis.NAME
 
@@ -44,12 +43,10 @@ def entry(state: GraphState) -> Literal["orientate", "synthesis"]:
 def build() -> StateGraph:
     builder: StateGraph = StateGraph(GraphState, context_schema=ControlContext)
     builder.add_node(ORIENTATE, orientate.orientate)
-    builder.add_node(ASSUME, assume.assume)
     builder.add_node(ANTITHESIS, antithesis.antithesis)
     builder.add_node(SYNTHESIS, synthesis.synthesis)
     builder.add_conditional_edges(START, entry, [ORIENTATE, SYNTHESIS])
-    builder.add_edge(ORIENTATE, ASSUME)
-    builder.add_edge(ASSUME, ANTITHESIS)
+    builder.add_edge(ORIENTATE, ANTITHESIS)
     builder.add_edge(ANTITHESIS, SYNTHESIS)
     builder.add_edge(SYNTHESIS, END)
     return builder
@@ -96,7 +93,7 @@ def check_topology() -> dict[str, tuple[str, ...]]:
     problems: dict[str, tuple[str, ...]] = {}
     names = set(STAGES)
 
-    pausing = tuple(sorted(m.NAME for m in (orientate, assume, antithesis, synthesis) if _calls_interrupt(m)))
+    pausing = tuple(sorted(m.NAME for m in (orientate, antithesis, synthesis) if _calls_interrupt(m)))
     if pausing:
         problems["frames that pause"] = pausing
 
@@ -117,9 +114,6 @@ def check_topology() -> dict[str, tuple[str, ...]]:
     return problems
 
 
-def render(*, inner: bool = False) -> str:
+def render() -> str:
     """The topology as mermaid, drawn from the compiled graph itself."""
-    drawn = compile_cycle().get_graph().draw_mermaid()
-    if not inner:
-        return drawn
-    return drawn + "\n%% inside " + ASSUME + "\n" + assume.subgraph().get_graph().draw_mermaid()
+    return compile_cycle().get_graph().draw_mermaid()
