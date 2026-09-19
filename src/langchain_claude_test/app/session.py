@@ -7,7 +7,8 @@ the graph state, because it is forked and checkpointed with it).
 
 Session metadata is one JSON file per session — flat and readable, so a
 session can be inspected or repaired with a text editor. The checkpoint
-database is shared and is LangGraph's.
+database is shared and is LangGraph's. The graph is shared too, as one op log
+under ``graph/`` (``graph/store.py``): a session holds its cycle, not the graph.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 CHECKPOINTS = "checkpoints.sqlite"
+GRAPH_LOG = "graph/ops.jsonl"
 
 
 def _now() -> str:
@@ -36,6 +38,10 @@ class SessionRecord:
     conversations: dict[str, str] = field(default_factory=dict)
     model: str | None = None
     effort: str | None = None
+    #: Graph caps and prices the user changed with ``/budget`` and ``/prices``,
+    #: as overrides on the configured defaults.
+    budgets: dict[str, int] = field(default_factory=dict)
+    prices: dict[str, int] = field(default_factory=dict)
     #: The session this one was forked from, if any.
     forked_from: str = ""
 
@@ -60,6 +66,11 @@ class SessionStore:
     @property
     def checkpoints(self) -> Path:
         return self.root / CHECKPOINTS
+
+    @property
+    def graph_log(self) -> Path:
+        """The project's one graph: the op log every session appends to."""
+        return self.root / GRAPH_LOG
 
     def _path(self, name: str) -> Path:
         return self.root / f"{name}.json"
