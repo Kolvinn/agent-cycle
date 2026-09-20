@@ -266,6 +266,106 @@ async def test_a_tool_result_expands_and_copies_without_the_terminal(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_an_interrupted_turn_takes_its_modal_with_it(tmp_path: Path):
+    """Audit finding 1. Live, interrupting with an approval open makes the CLI
+    abort the turn, which cancels the coroutine awaiting the answer. The modal
+    stayed on the stack over a turn that no longer existed, and answering it
+    called set_result on a cancelled future — InvalidStateError, app exits 1."""
+    import asyncio
+
+    from langchain_claude_test.app.harness.protocol import ApprovalRequest
+    from langchain_claude_test.app.tui.screens import ApprovalScreen
+
+    FakeChat.instances.clear()
+    config = AppConfig(cwd=tmp_path, sessions_dir=tmp_path / "sessions", modes=builtin_modes(PKG))
+    app = ProvenanceApp(config, "orphan")
+    app.runner._harness_factory = lambda r: ScriptedHarness(script=script(), approver=ScriptedApprover())
+    app.runner._chat_factory = FakeChat
+    request = ApprovalRequest(kind="alteration", tool_use_id="t1", name="close_node", input={"target": "a1.1"}, title="close a1.1")
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause(0.2)
+        turn = asyncio.create_task(app.approver.approve(request))
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, ApprovalScreen)
+
+        turn.cancel()  # what the aborted turn does to the awaiting coroutine
+        await pilot.pause(0.3)
+        assert not isinstance(app.screen, ApprovalScreen), "the modal outlived the turn it was blocking"
+        assert app.return_code in (None, 0)
+
+        # and an answer that arrives after the turn has gone is dropped, not
+        # raised: set_result on a cancelled future is what exited the app
+        gone: asyncio.Future = asyncio.get_running_loop().create_future()
+        gone.cancel()
+        app.approver._answer(gone)("an answer nobody is waiting for")
+
+        # the shell is still usable afterwards
+        app.input.value = "still here"
+        await pilot.press("enter")
+        await app.runner.idle()
+        await pilot.pause(0.2)
+        assert FakeChat.instances[0].sent == ["still here"]
+
+
+@pytest.mark.asyncio
+async def test_gated_calls_are_asked_one_at_a_time_in_order(tmp_path: Path):
+    """Audit finding 3. The SDK runs one task per permission request, so three
+    gated calls in one assistant message pushed three modals at once and the
+    user answered them in reverse. And finding 4: a node id is not something
+    you can judge, so the modal shows what the node says and the model's own
+    `because` above the JSON."""
+    import asyncio
+
+    from langchain_claude_test.app.harness.protocol import ApprovalRequest, Verdict
+    from langchain_claude_test.app.tui.screens import ApprovalScreen
+
+    FakeChat.instances.clear()
+    config = AppConfig(cwd=tmp_path, sessions_dir=tmp_path / "sessions", modes=builtin_modes(PKG))
+    app = ProvenanceApp(config, "parallel")
+    harness = ScriptedHarness(script=script(), approver=ScriptedApprover())
+    app.runner._harness_factory = lambda r: harness
+    app.runner._chat_factory = FakeChat
+
+    async with app.run_test(size=(100, 34)) as pilot:
+        await pilot.pause(0.2)
+        harness.sink = app.runner._session_sink
+        app.input.value = f"/graph {QUESTION}"
+        await pilot.press("enter")
+        await app.runner.idle()
+        await pilot.pause(0.3)  # the cycle has put real nodes in the graph
+
+        requests = [
+            ApprovalRequest(
+                kind="alteration",
+                tool_use_id=f"t{i}",
+                name="close_node",
+                input={"target": target, "verdict": "refuted", "because": f"reason number {i}"},
+                title=f"close {target}",
+            )
+            for i, target in enumerate(("a1.1", "a1.2", "a1.1"))
+        ]
+        turns = [asyncio.create_task(app.approver.approve(r)) for r in requests]
+        await pilot.pause(0.3)
+
+        # one modal, not three
+        assert sum(isinstance(s, ApprovalScreen) for s in app.screen_stack) == 1
+        assert app.screen.request.tool_use_id == "t0", "the modals did not open in call order"
+        shown = [plain(w) for w in app.screen.query("Static")]
+        assert any("2 more call(s) waiting" in t for t in shown)
+        assert any("Because, in the model's words: reason number 0" in t for t in shown)
+        # and the node's own text, not only its id
+        assert any(t == "The node: a1.1 — claim/assumption: assumption 1" for t in shown)
+
+        for i in range(3):
+            assert app.screen.request.tool_use_id == f"t{i}"
+            await pilot.press("ctrl+n")
+            await pilot.pause(0.2)
+        assert [t.result() for t in turns] == [Verdict(approved=False, answered_by="human", words="")] * 3
+        assert not isinstance(app.screen, ApprovalScreen)
+
+
+@pytest.mark.asyncio
 async def test_the_advertised_approve_key_approves(tmp_path: Path):
     """The modal advertises "Approve  ctrl+y", but the focused words box is a
     TextArea and TextArea binds ctrl+y to redo (_text_area.py:417). A screen

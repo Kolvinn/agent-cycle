@@ -42,6 +42,9 @@ class ApprovalScreen(ModalScreen[Verdict]):
     ApprovalScreen > Vertical { width: 90; max-height: 80%; border: thick $warning; background: $surface; padding: 1 2; }
     ApprovalScreen .title { text-style: bold; color: $warning; }
     ApprovalScreen .input { color: $text-muted; height: auto; max-height: 12; overflow-y: auto; }
+    ApprovalScreen .queued { color: $warning; text-style: bold; }
+    ApprovalScreen .target { color: $accent; height: auto; max-height: 4; }
+    ApprovalScreen .because { height: auto; max-height: 6; }
     ApprovalScreen TextArea { height: 5; }
     ApprovalScreen Horizontal { height: 3; align: right middle; }
     """
@@ -56,19 +59,37 @@ class ApprovalScreen(ModalScreen[Verdict]):
         Binding("ctrl+n", "refuse", "Refuse", priority=True),
     ]
 
-    def __init__(self, request: ApprovalRequest) -> None:
+    def __init__(self, request: ApprovalRequest, target_text: str = "", approver: Any = None) -> None:
         super().__init__()
         self.request = request
+        #: What the node this call names actually says, looked up in the graph
+        #: by the approver. A node id is not something you can judge.
+        self.target_text = target_text
+        #: The :class:`TuiApprover`, asked at mount time how many other calls
+        #: are waiting. Counted then, not when the modal was made: the SDK's
+        #: per-request tasks do not all start on the same tick.
+        self.approver = approver
+
+    def queued(self) -> int:
+        return max(0, int(getattr(self.approver, "waiting", 1)) - 1)
 
     def compose(self) -> ComposeResult:
         r = self.request
         what = "The agent proposes a change to the graph" if r.kind == "alteration" else "Claude wants to use a tool"
+        because = " ".join(str(dict(r.input).get("because") or "").split())
+        queued = self.queued()
         with Vertical():
             yield Label(Text(f"{what}: {r.name}"), classes="title")
+            if queued:
+                yield Static(Text(f"{queued} more call(s) waiting behind this one"), classes="queued")
             if r.title:
                 yield Static(Text(r.title))
+            if self.target_text:
+                yield Static(Text(f"The node: {self.target_text}"), classes="target")
             if r.description:
                 yield Static(Text(r.description))
+            if because:
+                yield Static(Text(f"Because, in the model's words: {because}"), classes="because")
             yield Static(Text(json.dumps(dict(r.input), indent=1, default=str)), classes="input")
             yield Label("Your words (they go back to the model, approved or not):")
             yield WordsArea(id="words")
@@ -193,28 +214,90 @@ class ChoiceScreen(ModalScreen[str | None]):
 
 
 class TuiApprover:
-    """The :class:`Approver` the runner uses — modals over the app."""
+    """The :class:`Approver` the runner uses — modals over the app.
+
+    Two things every modal here has to survive, both found live:
+
+    **The turn can go while the modal is up.** Interrupting a turn with an
+    approval open makes the CLI abort it, which cancels the coroutine awaiting
+    the answer. The modal was left on the stack over a turn that no longer
+    existed, and answering it then called ``set_result`` on a cancelled future
+    — ``InvalidStateError``, and the app exited 1. So a cancelled await takes
+    its own modal off the stack, and an answer to a future that is already
+    done is dropped.
+
+    **Several calls can ask at once.** The SDK runs one task per permission
+    request, so three gated calls in one assistant message asked for three
+    modals at once and the user answered them in reverse. One lock serialises
+    them: one modal at a time, in the order they asked (``asyncio.Lock`` wakes
+    its waiters first-in-first-out), and each modal says how many are behind
+    it.
+    """
 
     def __init__(self, app) -> None:
         self.app = app
+        self._lock = asyncio.Lock()
+        #: How many calls are asking, including the one on screen.
+        self.waiting = 0
+
+    @staticmethod
+    def _answer(future: asyncio.Future) -> Any:
+        """The dismiss callback. The turn this modal was blocking may already
+        have been interrupted, leaving a cancelled future; answering it must
+        not raise and take the app down with it."""
+
+        def done(value: Any) -> None:
+            if not future.done():
+                future.set_result(value)
+
+        return done
+
+    def _close(self, screen: Any) -> None:
+        """Take a modal off the stack when the turn it blocked has gone."""
+        try:
+            if screen.is_attached:
+                screen.dismiss(None)
+        except Exception:
+            pass
+
+    async def _answered_by(self, screen: Any) -> Any:
+        self.waiting += 1
+        try:
+            async with self._lock:
+                loop = asyncio.get_running_loop()
+                future: asyncio.Future = loop.create_future()
+                self.app.call_later(self.app.push_screen, screen, self._answer(future))
+                try:
+                    return await future
+                except asyncio.CancelledError:
+                    self.app.call_later(self._close, screen)
+                    raise
+        finally:
+            self.waiting -= 1
 
     async def approve(self, request: ApprovalRequest) -> Verdict:
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[Verdict] = loop.create_future()
-        self.app.call_later(self.app.push_screen, ApprovalScreen(request), lambda v: future.set_result(v))
-        return await future
+        return await self._answered_by(ApprovalScreen(request, target_text=self._node_text(request), approver=self))
 
     async def ask(self, questions: list[dict[str, Any]]) -> dict[str, Any]:
         answers: dict[str, Any] = {}
         for q in questions:
-            loop = asyncio.get_running_loop()
-            future: asyncio.Future[str] = loop.create_future()
-            self.app.call_later(self.app.push_screen, QuestionScreen(q), lambda v, f=future: f.set_result(v))
-            answers[q.get("question", "")] = await future
+            answers[q.get("question", "")] = await self._answered_by(QuestionScreen(q))
         return answers
 
     async def choose(self, title: str, options: list[tuple[str, str]], current: str = "") -> str | None:
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[str | None] = loop.create_future()
-        self.app.call_later(self.app.push_screen, ChoiceScreen(title, options, current), lambda v: future.set_result(v))
-        return await future
+        return await self._answered_by(ChoiceScreen(title, options, current))
+
+    def _node_text(self, request: ApprovalRequest) -> str:
+        """What the node the call names actually says, read from the project's
+        graph. The request carries the id; an id is not a thing you can judge."""
+        target = str(dict(request.input).get("target") or "").strip()
+        if not target:
+            return ""
+        try:
+            view = self.app.runner.graph_store.view()
+            attrs = view.nodes[target]
+        except Exception:
+            return ""
+        kind = "/".join(str(a) for a in (attrs.get("kind", ""), attrs.get("role", "")) if a)  # as the panel names them
+        text = " ".join(str(attrs.get("text", "")).split())
+        return f"{target} — {kind}: {text}" if text else ""
