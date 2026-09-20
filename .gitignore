@@ -15,3 +15,5 @@ agent_framework
 
 # App sessions (checkpoints, session metadata, event logs)
 sessions/
+
+Harness/
