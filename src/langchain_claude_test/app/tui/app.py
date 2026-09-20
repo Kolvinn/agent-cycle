@@ -139,6 +139,18 @@ class ProvenanceApp(App[None]):
         self.hint.set_class(not event.matches, "empty")
 
     async def action_interrupt(self) -> None:
+        """Esc.
+
+        Inside a modal it means *that modal's* escape and never the harness's
+        interrupt. The binding is app-level and priority, and Textual checks
+        priority bindings from the App down (``textual/app.py:3976``), so a
+        screen's own escape binding can never outrank it — the screen has to
+        be asked from here instead.
+        """
+        escape = getattr(self.screen, "escape", None)
+        if callable(escape):
+            escape()
+            return
         await self.runner.interrupt()
 
     def action_page_up(self) -> None:

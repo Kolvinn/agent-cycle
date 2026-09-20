@@ -4,6 +4,15 @@ A screen resolves a future the harness is awaiting inside ``can_use_tool``,
 which runs as a task on the same loop as the app — so the modal is pushed with
 ``call_later`` (safe from any task) and the transcript keeps streaming behind
 it.
+
+**Esc.** ``escape`` is an app-level *priority* binding for interrupt, and
+Textual checks priority bindings from the App down
+(``reversed(screen._binding_chain)``, ``textual/app.py:3976``), so a screen's
+own escape binding can never outrank it. Each modal therefore says what Esc
+means to it in ``escape()``, and the app's interrupt action asks the top
+screen first. Every one of these modals is a future something is blocked on,
+so ``escape()`` must **resolve** it: a dismissal that answers nothing would
+leave a turn waiting for ever.
 """
 
 from __future__ import annotations
@@ -77,6 +86,16 @@ class ApprovalScreen(ModalScreen[Verdict]):
         else:
             self.action_refuse()
 
+    def escape(self) -> None:
+        """Esc refuses, with whatever words are typed — as ctrl+n does.
+
+        The conservative answer: nothing happens to the graph, the model is
+        told, and the words ride back. It is also what the Claude CLI does at
+        a permission prompt. Esc here never interrupts the turn the modal is
+        blocking.
+        """
+        self.action_refuse()
+
 
 class QuestionScreen(ModalScreen[str]):
     """One of the model's questions: pick an option, or type your own answer."""
@@ -108,6 +127,12 @@ class QuestionScreen(ModalScreen[str]):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.value.strip():
             self.dismiss(event.value.strip())
+
+    def escape(self) -> None:
+        """Esc leaves the question unanswered — an empty answer, which is what
+        "I am not answering that" looks like to the frame that asked. The
+        frame is awaiting this future, so Esc must resolve it."""
+        self.dismiss("")
 
 
 class ChoiceScreen(ModalScreen[str | None]):
@@ -152,6 +177,11 @@ class ChoiceScreen(ModalScreen[str | None]):
 
     def action_leave(self) -> None:
         self.dismiss(None)
+
+    def escape(self) -> None:
+        """Esc leaves the setting as it is. The binding above cannot fire while
+        the app holds a priority ``escape``; this is the path that runs."""
+        self.action_leave()
 
 
 class TuiApprover:

@@ -176,3 +176,76 @@ async def test_every_terminal_size_renders_and_resizes_without_crashing(tmp_path
             await pilot.pause(0.05)
             assert app.panel_visible
         assert app.return_code in (None, 0)
+
+
+@pytest.mark.asyncio
+async def test_escape_in_a_modal_leaves_the_modal_not_the_turn(tmp_path: Path):
+    """Audit A2/A3 -> O. ``escape`` is an app-level *priority* binding
+    (``tui/app.py:68``), and Textual checks priority bindings from the App
+    down -- ``reversed(screen._binding_chain)``, ``textual/app.py:3976-3986``
+    -- so no screen binding, priority or not, can outrank it. Before this
+    change Esc inside any modal ran the app's interrupt while the modal stayed
+    up, and ``ChoiceScreen``'s own escape binding (``tui/screens.py:123``) was
+    never reached.
+    """
+    from textual.widgets import TextArea
+
+    from langchain_claude_test.app.harness.protocol import ApprovalRequest, Verdict
+    from langchain_claude_test.app.tui.screens import ApprovalScreen, ChoiceScreen, QuestionScreen
+
+    FakeChat.instances.clear()
+    config = AppConfig(cwd=tmp_path, sessions_dir=tmp_path / "sessions", modes=builtin_modes(PKG))
+    app = ProvenanceApp(config, "esc")
+    app.runner._harness_factory = lambda r: ScriptedHarness(script=script(), approver=ScriptedApprover())
+    app.runner._chat_factory = FakeChat
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause(0.2)
+        interrupts: list[int] = []
+        original = app.runner.interrupt
+
+        async def spy() -> None:
+            interrupts.append(1)
+            await original()
+
+        app.runner.interrupt = spy  # type: ignore[method-assign]
+
+        # A3: the picker. Esc leaves it as it is and never reaches the harness.
+        picked: list[str | None] = []
+        app.push_screen(ChoiceScreen("Model", [("a", "A"), ("b", "B")], current="a"), lambda v: picked.append(v))
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, ChoiceScreen)
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        assert not isinstance(app.screen, ChoiceScreen), "Esc did not leave the picker"
+        assert picked == [None]
+        assert interrupts == [], "Esc in the picker interrupted the harness"
+
+        # A2: the approval modal. Esc answers it -- a refusal, carrying the
+        # words -- and does not interrupt the turn the modal is blocking.
+        verdicts: list[Verdict] = []
+        request = ApprovalRequest(kind="alteration", tool_use_id="t1", name="close_node", input={"target": "a1.1"}, title="close a1.1")
+        app.push_screen(ApprovalScreen(request), lambda v: verdicts.append(v))
+        await pilot.pause(0.1)
+        app.screen.query_one("#words", TextArea).load_text("not this one")
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        assert not isinstance(app.screen, ApprovalScreen), "Esc left the approval modal up"
+        assert verdicts == [Verdict(approved=False, answered_by="human", words="not this one")]
+        assert interrupts == [], "Esc in the approval modal interrupted the harness"
+
+        # the model's question: Esc leaves it unanswered rather than hanging the frame
+        answers: list[str] = []
+        app.push_screen(QuestionScreen({"header": "h", "question": "q?", "options": []}), lambda v: answers.append(v))
+        await pilot.pause(0.1)
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        assert not isinstance(app.screen, QuestionScreen)
+        assert answers == [""]
+        assert interrupts == []
+
+        # with no modal up, Esc still reaches the runner
+        app.runner._busy = True
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        assert interrupts == [1]
