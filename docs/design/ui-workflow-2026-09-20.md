@@ -335,3 +335,151 @@ fail before it.
 13. the Report section of this file
 
 Every commit carries a test that failed before it, and says so.
+
+---
+
+# Report
+
+Written after the work. Branch `ui-workflow`, sixteen commits on top of `fa8f871`.
+**`uv run pytest tests -q` → 72 passed** (58 before), stable across three consecutive runs
+under `pytest-randomly`. Every commit carries a test that failed before it, and the commit
+message quotes the failure.
+
+## The three assumptions the brief named — each now an O
+
+| # | Verdict | The evidence |
+|---|---|---|
+| **A1** | **Holds → O.** A multi-line paste inserts into the prompt and sends nothing. | `tests/app/test_prompt.py::test_a_multiline_paste_inserts_and_does_not_send`. A paste is one `events.Paste`, not a run of Enter keys, so `PromptInput._on_key` never sees it. Both delivery paths are asserted: the terminal's (driver → app → focused widget, `textual/app.py:4142`) and a `Paste` posted at the widget. **The test found a real fault while proving it**: posted straight at the prompt, the text was inserted **three** times — once by `TextArea._on_paste`, again when the unstopped event bubbled to the app and was forwarded back to the focused widget, and again because Textual dispatches *every* `_on_paste` it finds on the MRO unless the default is prevented (`textual/message_pump.py:757-800`). Commit `f799b10` makes `PromptInput` claim the event. Pre-change failure: `assert 'a\nb\nca\nb\nc' == 'a\nb\nc'`. |
+| **A2** | **Confirmed → O.** Esc inside the approval modal fired the app's interrupt **and** left the modal up with its future unresolved. | Probe run before the change, recorded in `e73ba5f`: `A2 ApprovalScreen: still up=True verdict=[] interrupts=[1]`. Regression test: `tests/app/test_tui.py::test_escape_in_a_modal_leaves_the_modal_not_the_turn`. The same probe showed `QuestionScreen` behaving identically — `still up=True answer=[] interrupts=[1]` — which the audit had not recorded. |
+| **A3** | **Confirmed → O.** Esc in the `/model` picker never reached `action_leave`. | Same probe: `A3 ChoiceScreen: still up=True dismissed=[] interrupts=[1]`. Pre-change failure of the test: `AssertionError: Esc did not leave the picker`. |
+
+**The cause of A2 and A3, which the audit's O6 did not state.** It is not the missing
+bindings. `escape` is an **app-level priority** binding (`tui/app.py:68`) and Textual checks
+priority bindings `reversed(screen._binding_chain)` — **App first, then the screen, then the
+focused widget** (`textual/app.py:3966-3986`, `textual/screen.py:408-455`). So `ChoiceScreen`'s
+own escape binding could never have been reached, with or without `priority=True`. The fix is
+therefore in the *action*, not the binding: each modal says what Esc means to it in `escape()`
+and `action_interrupt` asks the top screen first.
+
+## What was built, with locators and tests
+
+| Commit | Item | Locators changed | Test |
+|---|---|---|---|
+| `daf3b5f` | the overview | `docs/design/ui-workflow-2026-09-20.md` | — |
+| `f799b10` | **(a) paste** | `tui/prompt.py` `_on_paste` | `test_prompt.py::test_a_multiline_paste_inserts_and_does_not_send` |
+| `e73ba5f` | **(d) Esc in modals** | `tui/screens.py` `escape()` ×3; `tui/app.py` `action_interrupt` | `test_tui.py::test_escape_in_a_modal_leaves_the_modal_not_the_turn` |
+| `fa84aa1` | **(c) prompt history** | `tui/prompt.py` `entries`, `record`, `recall_previous/next` | `test_prompt.py::test_up_and_down_recall_history_without_fighting_multiline` |
+| `c23d872` | **(b) expand + copy** | `tui/transcript.py` `ToolBlock.full_text/expand/_draw`, `last_text`, `expand_tool`, `_tool`; `tui/app.py` `_copy_command`/`_expand_command`/ctrl+o; `commands.py` BUILTINS | `test_tui.py::test_a_tool_result_expands_and_copies_without_the_terminal` |
+| `33c428c` | **(h) transcript clear** | `tui/transcript.py` `clear_transcript`; `tui/app.py` `_wipe_command`/ctrl+l; `commands.py` | `test_tui.py::test_wipe_clears_the_screen_and_clear_still_goes_to_the_conversation` |
+| `67d2fa7` | **(g) frame feedback** | `tui/transcript.py` `TurnStarted(kind="graph")` case + `.running`; `tui/panels.py` `StatusBar.apply` | `test_tui.py::test_the_transcript_says_which_frame_is_running` |
+| `4c3caea` | **(i) the log, E64** | `harness/events.py` `RESULT_EVENTS`, `NOT_LOGGED`, `JsonlSink.emit` | `test_runner.py::test_the_session_log_holds_result_events_only` |
+| `1bdc147` | **(e) read-only lane** | `commands.py` `READ_ONLY`/`is_read_only`; `runner.py` `submit`, `_read_only_lane`, `idle`, `_session_ready` | `test_runner.py::test_read_only_commands_answer_while_a_turn_is_in_flight` |
+| `10b1428` | **(f) reopen the last session** | `session.py` `SessionStore.latest`; `runner.py` `_open_initial` | `test_runner.py::test_a_launch_with_no_name_reopens_the_last_session` |
+| `8c0e34b` | **(j) ctrl+q** | `runner.py` `quit()`; `tui/app.py` `action_quit` | `test_tui.py::test_ctrl_q_closes_the_clients_as_quit_does` |
+| `67fc25c` | **(k) idle Esc** | `tui/app.py` `action_interrupt` | folded into the modal test |
+| `6ea96d7` | **audit finding 2** — the approve key | `tui/screens.py` `ApprovalScreen.BINDINGS` | `test_tui.py::test_the_advertised_approve_key_approves` |
+| `46da48c` | **audit findings 1, 3, 4** — orphaned modal, parallel calls, what the modal shows | `tui/screens.py` `TuiApprover._answer/_close/_answered_by/_node_text`, `ApprovalScreen.compose` | `test_tui.py::test_an_interrupted_turn_takes_its_modal_with_it`, `::test_gated_calls_are_asked_one_at_a_time_in_order` |
+| `eda6d2c` | **audit finding 5** — the shell's lines in the log | `runner.py` (45 emits move from `sink` to `_session_sink`) | folded into the log test |
+| `54d042d` | **(l) queued marker, cwd** | `tui/transcript.py` `user(queued=)`/`dequeued`; `runner.py` `on_dequeue`; `tui/panels.py` `StatusBar.set_cwd` | `test_tui.py::test_a_line_typed_behind_a_turn_is_marked_queued_and_the_status_says_where` |
+
+## Every D I took
+
+| # | Decision | Why | The rival, if you prefer it |
+|---|---|---|---|
+| **D-U1** | Prompt history lives for the **run**, in the widget, across session switches; not on disk. | No new on-disk format to corrupt or migrate, and nothing that lands inside whatever project this repo is cloned into and gitignored (E59). | The CLI persists across restarts. One file away. Per-*session* history is the worst of the three: `/new` and `/resume` would throw away a recall you were halfway through. |
+| **D-U2** | Esc in the **approval** modal **refuses**, carrying the typed words, exactly as ctrl+n. | The modal is a future the harness is blocked on; a dismissal that answers nothing hangs the turn. Refusing is the conservative answer — nothing happens to the graph, the model is told, the words ride back (D6) — and it is what the Claude CLI does at a permission prompt. | A stray Esc now refuses a call you meant to approve. If you would rather it were a no-op with a hint, that is one line. |
+| **D-U3** | Esc in the **question** modal answers `""` — unanswered. | Same reason: the frame is awaiting that future. | — |
+| **D-U4** | The read-only lane is **a second queue on a second task**, not a task per command. | Keeps read-only commands in order among themselves, cannot start an unbounded number of tasks, and leaves the model-turn path byte-for-byte as it was: one queue, one task, one owner of the SDK clients. | — |
+| **D-U5** | `/budget` and `/prices` are split **by arity**: printing takes the lane, writing keeps its place in the queue. | Budget and price semantics are untouched, which the brief forbids changing. | — |
+| **D-U6** | "The last session" is the one whose **record file was written most recently** (mtime), name breaking the tie. | The record is rewritten on every `/model`, `/effort`, `/budget`, `/prices` and change of focus, so mtime is "the one I was last working in". The name tie-break is chronological for the generated `s-<timestamp>` names and is the fallback for a store restored from a copy that lost its times. | A blank shell every launch, as a `--new` flag. Say the word. |
+| **D-U7** | **`StageStarted` stays unemitted and unrendered**; `TurnStarted(kind="graph")` is what the transcript draws. | Emitting `StageStarted` would mean the driver predicting a cycle number the frame itself allocates from the op log (`graph/nodes/orientate.py:100`), and the frames are not mine to change. `TurnStarted` already carries stage and cycle *from inside the frame* and is emitted by both the real and the scripted harness. | `StageStarted` is now documented dead code. Keep it and emit it from the driver, or delete it — the audit's call. |
+| **D-U8** | The transcript clear is named **`/wipe`**, with **ctrl+l** beside it. | `/clear` is the CLI's and is passed through to the conversation (`commands.py`); taking the name would silently change what muscle memory does to the conversation. ctrl+l is the CLI's screen clear, and E62 wants a path that is not one key in one terminal. | Any other name; it is one dict entry and one binding. |
+| **D-U9** | The session log uses an **allow-list** (`RESULT_EVENTS`), not a deny-list, plus a test that the two lists partition the `HarnessEvent` union. | A stream event added later cannot leak onto disk by being forgotten; adding an event type fails loudly instead of being silently written or silently dropped. | — |
+| **D-U10** | `Runner.quit()` closes the clients **first**, then stops the queue, then calls `on_quit`. | `on_quit` is the app's `exit` and the runner's task does not survive the app's unwind, so a QUIT left on the queue to do the closing might never be read. Closing first is deterministic and testable without racing the shutdown. | — |
+| **D-U11** | The approver serialises modals with **one `asyncio.Lock`**, and each modal reads the waiting count **at mount**. | `asyncio.Lock` wakes its waiters first-in-first-out, which is the call order. The count is read at mount because the SDK's per-request tasks do not all start on one tick — reading it when the modal was constructed showed 0. | — |
+| **D-U12** | The approval modal looks the node up in `runner.graph_store.view()` **from the TUI**. | Audit finding 4 asked for the node's text and the model's `because` without touching `hooks.py` or `tools.py`. The `ApprovalRequest` carries the id and the `because`; the text is a read of the graph the shell already holds. Kind and role are joined with `/`, as the panel names them. | — |
+
+## The five findings the audit handed over, late
+
+All five are done, on this branch, each with a Pilot test.
+
+1. **Orphaned modal** (`46da48c`). Live, interrupting with an approval open aborts the turn,
+   which cancels the coroutine awaiting the answer; the modal stayed up over a turn that no
+   longer existed and answering it called `set_result` on a cancelled future —
+   `InvalidStateError`, exit 1. A cancelled await now takes its own modal off the stack, and an
+   answer to a future that is already done is dropped. Both halves tested; the second by handing
+   a cancelled future to the dismiss callback directly.
+2. **The approve key** (`6ea96d7`). `ctrl+y` was bound on the modal and swallowed by the focused
+   `TextArea`, which binds it to redo (`_text_area.py:417`). Both verdict keys are now priority
+   bindings. Test presses the advertised key and asserts the verdict.
+3. **Parallel gated calls** (`46da48c`). One `asyncio.Lock` in `TuiApprover`: one modal at a
+   time, in call order, and each says how many are behind it. Test fires three `approve()` tasks
+   and asserts one screen on the stack, `t0` first, and the verdicts in order.
+4. **What the modal shows** (`46da48c`). Above the JSON: the node's kind, role and text from
+   `runner.graph_store.view()`, and the model's `because` on a labelled line. `hooks.py` and
+   `tools.py` untouched.
+5. **Runner notices in the log** (`eda6d2c`). All 45 of the runner's emits move from `sink` to
+   `_session_sink`, so the record carries the shell's own lines as well as the model's turns.
+
+## What the audit should know — found while proving something else
+
+1. **`StageStarted` is dead code.** Defined at `harness/events.py:140`, constructed nowhere.
+   `grep -rn StageStarted --include=*.py` returns the definition and the union member only.
+2. **Audit O2 is misattributed and half refuted.** `ALLOW_SELECT = False` at
+   `textual/widgets/_collapsible.py:22` belongs to **`CollapsibleTitle`**, not `Collapsible`
+   (`Collapsible` is line 99 and sets nothing). A mouse drag hit-tests to the innermost widget,
+   which over a tool result is the body `Static` — so **the result always was draggable**. What
+   cannot be dragged over is the *title* row: the tool's name, its input and its price. The test
+   drives a real `mouse_down`/`hover`/`mouse_up` and asserts both halves.
+3. **orientate's `StageFinished` line is computed from the wrong checkpoint.** It reads
+   `── orientate · cycle 0 ── 0 finding(s), 0 assumption(s), 0 points spent` while the panel in
+   the same run reads `orientation:1 5/20`. The driver reads the thread state back as the node's
+   update streams and gets the pre-frame checkpoint (`graph_driver.py:112-115`). Not touched —
+   it is a driver/frame question. The test says so and does not assert on it.
+4. **`/show` now reads the shared op log concurrently with a frame appending to it.** The
+   read-only lane made that concurrent where it was serialised. This is the audit's own S-2 (a
+   torn last line); the lane does not create the hazard but it does widen the window.
+5. **A pre-existing flake**, hardened in `fa84aa1`:
+   `test_transcript_stops_following_when_the_reader_scrolls_up` asserted a scroll position one
+   frame after twenty mounts, and fails when a slower neighbour runs first under
+   `pytest-randomly`. It now waits on the clock.
+
+## What I did not do
+
+§4 above still stands as written. The ones worth repeating:
+
+- **The graph panel / `GraphPanel`** — frozen by E63. `Tree.ALLOW_SELECT = False` (the other
+  half of audit O2) is untouched for the same reason.
+- **Transcript search** — needs `transcript.py` to own its text as a model rather than as
+  mounted widgets. `/copy` and `/expand` cover the common case (get it out and search it there).
+- **Transcript export** — `sessions/<name>/events.jsonl` now *is* the export, and after (i) and
+  finding 5 it is a readable, result-level record of both the model's turns and the shell's
+  lines. A second exporter would be a second truth.
+- **Esc Esc to rewind** — checkpoint surgery on the frame pointer; a design question for the
+  audit (it interacts with `/fork` and with D7), not a UI item.
+- **shift+tab permission modes** — permission mode is `"default"` in `chat.py:61` and the whole
+  approval discipline rests on it. A keystroke must not be able to turn the approval surface
+  off. **Needs the audit.**
+- **`!` bash mode, `@` file mention, `#` memory** — `!` would be a second executor beside the
+  fenced one (`harness/tools.py`, forbidden). **Needs the audit.**
+- **Image paste** — Textual delivers a paste as text; an image needs the SDK's content-block
+  path in `chat.py`/`sdk.py`. **Needs the audit.**
+- **A context-left meter** — nothing in `harness/events.py` carries token counts; it would need
+  `sdk.py` (forbidden) to emit usage. **Needs the audit.**
+- **A `/resume` picker** — cheap (`ChoiceScreen` exists) but `/resume` closes and reopens
+  clients, so it is a model-turn-lane command and the picker would hold that lane open. Listed
+  so it is not lost.
+- **ctrl+c / ctrl+d to exit** — Textual binds ctrl+c to copy-selection (`textual/screen.py:272`);
+  rebinding it would take the only mouse-copy key away, which E62 forbids. ctrl+q is the exit.
+
+## The shell as it now stands
+
+New keys: **ctrl+o** expand the last tool result · **ctrl+l** clear the screen · **↑/↓** recall ·
+**ctrl+q** quit through the runner · **Esc** interrupt, or answer the modal that is up, or say
+nothing is running.
+
+New commands: **`/copy [last|tool|user]`** · **`/expand [n]`** · **`/wipe`**. All three are in
+`BUILTINS`, so `/help` lists them and Tab completes them.
+
+Answered without waiting for the model: `/show` `/panel` `/sessions` `/help` `/modes` `/copy`
+`/expand` `/wipe`, and `/budget` / `/prices` with no arguments.
