@@ -112,6 +112,7 @@ class Transcript(VerticalScroll):
     Transcript .warning { color: $warning; }
     Transcript .error { color: $error; }
     Transcript .stage { color: $success; text-style: bold; margin: 1 0 0 0; }
+    Transcript .running { color: $text-muted; text-style: bold; margin: 1 0 0 0; }
     Transcript .approval { color: $warning; margin: 0 0 0 2; }
     """
 
@@ -215,6 +216,13 @@ class Transcript(VerticalScroll):
         if isinstance(event, (ev.ToolStarted, ev.ToolCalled)) and event.name == "StructuredOutput":
             return  # the synthetic call structured output arrives as; the payload is the frame's answer
         match event:
+            case ev.TurnStarted(kind="graph", stage=stage, cycle=cycle):
+                # Which frame is running, said when it starts rather than when
+                # it ends. `StageStarted` exists in harness/events.py and is
+                # emitted by nothing; this is the event the frames actually
+                # send (harness/sdk.py:133, harness/scripted.py:102).
+                self._close_blocks()
+                self._add(Static(Text(f"── {stage} · cycle {cycle} ── running"), classes="running"))
             case ev.TurnStarted():
                 self._close_blocks()
             case ev.ThinkingDelta(text=text):

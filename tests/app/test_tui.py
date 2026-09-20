@@ -266,6 +266,66 @@ async def test_a_tool_result_expands_and_copies_without_the_terminal(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_the_transcript_says_which_frame_is_running(tmp_path: Path):
+    """Audit A5. During a frame nothing on screen moved but "⋯ working": the
+    transcript drew nothing for TurnStarted (O-U9) and the panel's pools only
+    arrive with StateSnapshot, after the frame (O-U10). StageStarted, which
+    would have said it, is defined at harness/events.py:140 and emitted by
+    nothing (O-U8) — TurnStarted(kind="graph") is what the frames send.
+    """
+    FakeChat.instances.clear()
+    config = AppConfig(cwd=tmp_path, sessions_dir=tmp_path / "sessions", modes=builtin_modes(PKG))
+    app = ProvenanceApp(config, "running")
+    harness = ScriptedHarness(script=script(), approver=ScriptedApprover())
+    app.runner._harness_factory = lambda r: harness
+    app.runner._chat_factory = FakeChat
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.2)
+        harness.sink = app.runner._session_sink
+        app.input.value = f"/graph {QUESTION}"
+        await pilot.press("enter")
+        await app.runner.queue.join()
+        await pilot.pause(0.3)
+
+        running = [plain(w) for w in app.transcript.query(".running")]
+        assert running == [
+            "── orientate · cycle 1 ── running",
+            "── antithesis · cycle 1 ── running",
+            "── synthesis · cycle 1 ── running",
+        ]
+        # and each one is drawn before the line that says the frame finished.
+        # The finished line's own cycle number is not asserted here: the
+        # driver reads the thread state back as the node's update streams and
+        # gets the pre-frame checkpoint, so orientate's StageFinished says
+        # "cycle 0 ... 0 points spent" while the panel says orientation:1 5/20.
+        # That is graph_driver.py:112-115 and belongs to the audit, not here.
+        order = [plain(w) for w in app.transcript.query("Static")]
+        for frame in ("orientate", "antithesis", "synthesis"):
+            lines = [i for i, t in enumerate(order) if t.startswith(f"── {frame}")]
+            assert len(lines) == 2, f"{frame} should have a running line and a finished one"
+            assert order[lines[0]].endswith("running")
+
+        # the status line carries the pool as calls are priced, not only after
+        # the frame commits: the last call of the cycle priced the antithesis
+        # pool, and the line says so
+        assert "antithesis:1 5 left" in plain(app.status)
+        from langchain_claude_test.app.harness import events as ev
+
+        app.status.apply(ev.Priced(tool_use_id="x", name="Read", call_class="read", price=2, pool="orientation:9", remaining=11))
+        assert "orientation:9 11 left" in plain(app.status)
+
+        # a chat turn does not draw a frame line
+        app.input.value = "/chat"
+        await pilot.press("enter")
+        app.input.value = "hi"
+        await pilot.press("enter")
+        await app.runner.queue.join()
+        await pilot.pause(0.2)
+        assert [plain(w) for w in app.transcript.query(".running")] == running
+
+
+@pytest.mark.asyncio
 async def test_wipe_clears_the_screen_and_clear_still_goes_to_the_conversation(tmp_path: Path):
     """E55. There was no way to clear the screen at all (O-U11), and `/clear`
     must keep meaning what the CLI means by it — it is passed through to the

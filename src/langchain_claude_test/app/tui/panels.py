@@ -129,6 +129,11 @@ class StatusBar(Static):
         self.effort = ""
         self.busy = False
         self.cost = 0.0
+        #: The pool the last priced call drew on, and what it left. `Priced`
+        #: is per call, so this moves *during* a frame; the panel's pools come
+        #: from `StateSnapshot`, which only arrives once the frame has ended.
+        self.pool = ""
+        self.pool_left = 0
 
     def set_session(self, record: SessionRecord | None) -> None:
         if record is not None:
@@ -148,6 +153,11 @@ class StatusBar(Static):
         match event:
             case ev.StateSnapshot(stage=stage, cycle=cycle):
                 self.stage, self.cycle = stage, cycle
+            case ev.TurnStarted(kind="graph", stage=stage, cycle=cycle):
+                # the frame that is running now, not the one that last finished
+                self.stage, self.cycle = stage or self.stage, cycle or self.cycle
+            case ev.Priced(pool=pool, remaining=remaining):
+                self.pool, self.pool_left = pool, remaining
             case ev.SessionInfo(model=model):
                 self.model = model or self.model
             case ev.TurnFinished(cost_usd=cost):
@@ -159,6 +169,8 @@ class StatusBar(Static):
 
     def refresh_line(self) -> None:
         graph = f"  cycle {self.cycle} · {self.stage}" if self.cycle else ""
+        if self.pool:
+            graph += f" · {self.pool} {self.pool_left} left"
         state = "⋯ working" if self.busy else "idle"
         cost = f"  ~${self.cost:.3f}" if self.cost else ""
         effort = f" · {self.effort}" if self.effort else ""
