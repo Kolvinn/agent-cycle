@@ -73,6 +73,65 @@ async def test_tab_completes_a_command_and_the_hint_lists_matches():
         assert app.submitted == ["/model sonnet"]
 
 
+@pytest.mark.asyncio
+async def test_up_and_down_recall_history_without_fighting_multiline():
+    """E55, "regular workflow operations": up/down walk what was sent, as the
+    Claude CLI does, and only when the cursor is on the first/last line — so
+    the same keys still move the cursor inside a multi-line message."""
+    app = PromptHarness()
+    async with app.run_test(size=(40, 12)) as pilot:
+        app.prompt.focus()
+        for line in ("/help", "first message", "/model sonnet", "/model sonnet"):
+            app.prompt.value = line
+            await pilot.press("enter")
+            await pilot.pause()
+        assert app.submitted == ["/help", "first message", "/model sonnet", "/model sonnet"]
+        # `history` is TextArea's own undo stack, so the recall list is `entries`
+        assert app.prompt.entries == ["/help", "first message", "/model sonnet"]  # no run of duplicates
+
+        await pilot.press("up")
+        assert app.prompt.text == "/model sonnet"
+        assert app.prompt.cursor_location == (0, len("/model sonnet"))  # ready to edit the end
+        await pilot.press("up")
+        assert app.prompt.text == "first message"
+        await pilot.press("up")
+        assert app.prompt.text == "/help"
+        await pilot.press("up")
+        assert app.prompt.text == "/help"  # the oldest holds
+
+        await pilot.press("down")
+        assert app.prompt.text == "first message"
+        await pilot.press("down", "down")
+        assert app.prompt.text == ""  # back past the newest is the draft, empty here
+        await pilot.press("down")
+        assert app.prompt.text == ""
+
+        # an unsent draft is kept and given back
+        await pilot.press(*"half typed")
+        await pilot.press("up")
+        assert app.prompt.text == "/model sonnet"
+        await pilot.press("down")
+        assert app.prompt.text == "half typed"
+
+        # multi-line: up on the second line moves the cursor, it does not recall
+        app.prompt.value = ""
+        await pilot.press(*"alpha")
+        await pilot.press("shift+enter")
+        await pilot.press(*"beta")
+        assert app.prompt.text == "alpha\nbeta" and app.prompt.cursor_location == (1, 4)
+        await pilot.press("up")
+        assert app.prompt.text == "alpha\nbeta", "up inside a multi-line message recalled history"
+        assert app.prompt.cursor_location[0] == 0
+        await pilot.press("down")
+        assert app.prompt.text == "alpha\nbeta", "down inside a multi-line message recalled history"
+        assert app.prompt.cursor_location[0] == 1
+        # and from the first line it does recall, replacing the draft
+        await pilot.press("up", "up")
+        assert app.prompt.text == "/model sonnet"
+        await pilot.press("down")
+        assert app.prompt.text == "alpha\nbeta"
+
+
 class TranscriptHarness(App[None]):
     CSS = "Transcript { height: 6; }"
 
@@ -91,7 +150,9 @@ async def test_transcript_stops_following_when_the_reader_scrolls_up():
         t = app.transcript
         for i in range(20):
             t.apply(ev.Notice(text=f"line {i}"))
-        await pilot.pause()
+        # the first scroll_end can only land once the twenty mounts have laid
+        # out, so this one waits on the clock rather than on a single frame
+        await pilot.pause(0.1)
         assert t.following and t.scroll_y == t.max_scroll_y
 
         t.page_up()
