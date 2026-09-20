@@ -37,14 +37,14 @@ async def test_app_runs_a_scripted_cycle_and_draws_it(tmp_path: Path):
 
         app.input.value = "/help"
         await pilot.press("enter")
-        await app.runner.queue.join()
+        await app.runner.idle()
         await pilot.pause(0.2)
         notices = [w for w in app.transcript.query(".notice")]
         assert any("Built-ins" in plain(w) for w in notices)
 
         app.input.value = f"/graph {QUESTION}"
         await pilot.press("enter")
-        await app.runner.queue.join()
+        await app.runner.idle()
         await pilot.pause(0.3)
         stages = [plain(w) for w in app.transcript.query(".stage")]
         assert [s.split(" · ")[0] for s in stages] == ["── orientate", "── antithesis", "── synthesis"]
@@ -62,19 +62,19 @@ async def test_app_runs_a_scripted_cycle_and_draws_it(tmp_path: Path):
         assert any(b.startswith("claim/assumption (2)") for b in branches) and any(b.startswith("evidence (") for b in branches)
         app.input.value = "/panel view status"
         await pilot.press("enter")
-        await app.runner.queue.join()
+        await app.runner.idle()
         await pilot.pause(0.2)
         assert "by status" in app.panel.graph_tree.root.label.plain
         assert any(str(n.label).startswith("provisional (") for n in app.panel.graph_tree.root.children)
         app.panel.pick("a1.1")
         await pilot.pause(0.2)
-        await app.runner.queue.join()
+        await app.runner.idle()
         await pilot.pause(0.2)
         shown = [plain(w) for w in app.transcript.query(".notice")]
         assert any(t.startswith("assumption a1.1:") and "← asks q1" in t for t in shown)
         app.input.value = "/panel view outline"
         await pilot.press("enter")
-        await app.runner.queue.join()
+        await app.runner.idle()
         await pilot.pause(0.2)
         assert "by outline" in app.panel.graph_tree.root.label.plain
 
@@ -82,7 +82,7 @@ async def test_app_runs_a_scripted_cycle_and_draws_it(tmp_path: Path):
         await pilot.press("enter")
         app.input.value = "hi"
         await pilot.press("enter")
-        await app.runner.queue.join()
+        await app.runner.idle()
         await pilot.pause(0.2)
         assert FakeChat.instances[0].sent == ["hi"]
         assistant = [plain(w) for w in app.transcript.query(".assistant")]
@@ -105,12 +105,12 @@ async def test_panel_can_be_hidden_resized_and_shown(tmp_path: Path):
         assert app.panel_visible and app.panel.styles.width.value == 46
         app.input.value = "/panel 30"
         await pilot.press("enter")
-        await app.runner.queue.join()
+        await app.runner.idle()
         await pilot.pause(0.1)
         assert app.panel.styles.width.value == 30
         app.input.value = "/panel hide"
         await pilot.press("enter")
-        await app.runner.queue.join()
+        await app.runner.idle()
         await pilot.pause(0.1)
         assert not app.panel_visible
         assert "sonnet · medium" in plain(app.status)
@@ -199,7 +199,7 @@ async def test_a_tool_result_expands_and_copies_without_the_terminal(tmp_path: P
         await pilot.pause(0.2)
         app.input.value = "a message of mine"
         await pilot.press("enter")
-        await app.runner.queue.join()
+        await app.runner.idle()
         await pilot.pause(0.2)
 
         app.transcript.apply(ev.ToolStarted(tool_use_id="t1", name="Read"))
@@ -213,7 +213,7 @@ async def test_a_tool_result_expands_and_copies_without_the_terminal(tmp_path: P
         # /expand shows the whole of it and opens the block
         app.input.value = "/expand"
         await pilot.press("enter")
-        await app.runner.queue.join()
+        await app.runner.idle()
         await pilot.pause(0.2)
         assert "line 29" in plain(block._body) and "more lines" not in plain(block._body)
         assert not block.collapsed
@@ -221,7 +221,7 @@ async def test_a_tool_result_expands_and_copies_without_the_terminal(tmp_path: P
         # /copy tool copies the result in full, not the 24 lines that were drawn
         app.input.value = "/copy tool"
         await pilot.press("enter")
-        await app.runner.queue.join()
+        await app.runner.idle()
         await pilot.pause(0.2)
         assert app._clipboard == body
 
@@ -229,12 +229,12 @@ async def test_a_tool_result_expands_and_copies_without_the_terminal(tmp_path: P
         # /commands I typed to get here are not messages
         app.input.value = "/copy last"
         await pilot.press("enter")
-        await app.runner.queue.join()
+        await app.runner.idle()
         await pilot.pause(0.2)
         assert app._clipboard == "[chat] echo: a message of mine"
         app.input.value = "/copy user"
         await pilot.press("enter")
-        await app.runner.queue.join()
+        await app.runner.idle()
         await pilot.pause(0.2)
         assert app._clipboard == "a message of mine"
 
@@ -285,7 +285,7 @@ async def test_the_transcript_says_which_frame_is_running(tmp_path: Path):
         harness.sink = app.runner._session_sink
         app.input.value = f"/graph {QUESTION}"
         await pilot.press("enter")
-        await app.runner.queue.join()
+        await app.runner.idle()
         await pilot.pause(0.3)
 
         running = [plain(w) for w in app.transcript.query(".running")]
@@ -320,7 +320,7 @@ async def test_the_transcript_says_which_frame_is_running(tmp_path: Path):
         await pilot.press("enter")
         app.input.value = "hi"
         await pilot.press("enter")
-        await app.runner.queue.join()
+        await app.runner.idle()
         await pilot.pause(0.2)
         assert [plain(w) for w in app.transcript.query(".running")] == running
 
@@ -341,13 +341,13 @@ async def test_wipe_clears_the_screen_and_clear_still_goes_to_the_conversation(t
         await pilot.pause(0.2)
         app.input.value = "something to remember"
         await pilot.press("enter")
-        await app.runner.queue.join()
+        await app.runner.idle()
         await pilot.pause(0.2)
         assert any("echo: something to remember" in plain(w) for w in app.transcript.query(".assistant"))
 
         app.input.value = "/wipe"
         await pilot.press("enter")
-        await app.runner.queue.join()
+        await app.runner.idle()
         await pilot.pause(0.2)
         left = [plain(w) for w in app.transcript.query("Static")]
         assert not any("something to remember" in t for t in left)
@@ -356,7 +356,7 @@ async def test_wipe_clears_the_screen_and_clear_still_goes_to_the_conversation(t
         # /clear is still the conversation's, and the transcript keeps its reply
         app.input.value = "/clear"
         await pilot.press("enter")
-        await app.runner.queue.join()
+        await app.runner.idle()
         await pilot.pause(0.2)
         assert FakeChat.instances[0].sent[-1] == "/clear"
         assert any("echo: /clear" in plain(w) for w in app.transcript.query(".assistant"))

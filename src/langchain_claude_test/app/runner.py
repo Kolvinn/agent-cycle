@@ -9,6 +9,12 @@ the outside only as events, so the runner has no idea what is rendering them.
 *"I should be able to exit and enter the graph flow as I wish whilst staying
 in the same session or switching sessions."* — ``/graph`` and ``/chat`` move
 the focus; ``/resume`` and ``/new`` move between sessions; the clients follow.
+
+There is a **second lane** for the commands that answer out of what the shell
+already holds (``commands.READ_ONLY``): ``/show``, ``/help``, ``/sessions``
+and their kind run on their own task so that looking at something does not
+wait behind a model turn. Nothing on that lane opens a client, runs a turn or
+writes a session record, and the model-turn queue is untouched by it.
 """
 
 from __future__ import annotations
@@ -18,7 +24,7 @@ from dataclasses import fields, replace
 from typing import Any, Awaitable, Callable
 
 from .chat import ChatDriver
-from .commands import Command, CommandSet, parse
+from .commands import Command, CommandSet, is_read_only, parse
 from .config import EFFORT_DESCRIPTIONS, EFFORT_LEVELS, FALLBACK_MODELS, PROVISIONAL, AppConfig, Budgets, Mode, ModelChoice
 from .graph import ControlContext
 from .graph.graph import sqlite_checkpointer
@@ -53,6 +59,14 @@ class Runner:
         self.graph_store = GraphStore(self.store.graph_log)
         self.commands = CommandSet(config.modes)
         self.queue: asyncio.Queue[Any] = asyncio.Queue()
+        #: The read-only lane: ``/show``, ``/help``, ``/sessions`` and the rest
+        #: of :data:`commands.READ_ONLY`, drained by their own task so they
+        #: answer while a turn is in flight. Nothing on this lane opens a
+        #: client, runs a model turn or writes a session record.
+        self.fast_queue: asyncio.Queue[Any] = asyncio.Queue()
+        #: Held closed while a session is being swapped, so the read-only lane
+        #: never reads a half-open session.
+        self._session_ready = asyncio.Event()
         self.session: SessionRecord | None = None
         self.settings = config.settings
         self.budgets: Budgets = config.budgets
@@ -74,7 +88,14 @@ class Runner:
     # --- lifecycle -----------------------------------------------------------
 
     def submit(self, text: str) -> None:
-        self.queue.put_nowait(text)
+        """Route what was typed. A read-only command takes the second lane;
+        everything else keeps its place in the one queue, in order, on the one
+        task that owns the SDK clients."""
+        command = parse(text)
+        if command is not None and is_read_only(command):
+            self.fast_queue.put_nowait(text)
+        else:
+            self.queue.put_nowait(text)
 
     async def run(self, initial_session: str | None = None) -> None:
         async with sqlite_checkpointer(self.store.checkpoints) as saver:
@@ -84,20 +105,41 @@ class Runner:
             else:
                 record = self.store.create(initial_session, mode=self.config.modes.default)
                 await self.open_session(record.name)
-            while True:
-                item = await self.queue.get()
-                if item is QUIT:
-                    self.queue.task_done()
-                    break
-                try:
-                    self._busy = True
-                    await self.handle(str(item))
-                except Exception as exc:  # the shell survives a failed turn; the user sees why
-                    self.sink.emit(Notice(text=f"{type(exc).__name__}: {exc}", level="error"))
-                finally:
-                    self._busy = False
-                    self.queue.task_done()
+            fast = asyncio.create_task(self._read_only_lane())
+            try:
+                while True:
+                    item = await self.queue.get()
+                    if item is QUIT:
+                        self.queue.task_done()
+                        break
+                    try:
+                        self._busy = True
+                        await self.handle(str(item))
+                    except Exception as exc:  # the shell survives a failed turn; the user sees why
+                        self.sink.emit(Notice(text=f"{type(exc).__name__}: {exc}", level="error"))
+                    finally:
+                        self._busy = False
+                        self.queue.task_done()
+            finally:
+                fast.cancel()
             await self._close_clients()
+
+    async def _read_only_lane(self) -> None:
+        """The second lane. In order among themselves, and never in the way."""
+        while True:
+            item = await self.fast_queue.get()
+            try:
+                await self._session_ready.wait()
+                await self.handle(str(item))
+            except Exception as exc:
+                self.sink.emit(Notice(text=f"{type(exc).__name__}: {exc}", level="error"))
+            finally:
+                self.fast_queue.task_done()
+
+    async def idle(self) -> None:
+        """Both lanes drained — what a test waits on instead of one queue."""
+        await self.queue.join()
+        await self.fast_queue.join()
 
     async def stop(self) -> None:
         self.queue.put_nowait(QUIT)
@@ -109,6 +151,7 @@ class Runner:
     # --- sessions --------------------------------------------------------------
 
     async def open_session(self, name: str) -> None:
+        self._session_ready.clear()  # the read-only lane waits out the swap
         await self._close_clients()
         record = self.store.load(name)
         self.session = record
@@ -133,6 +176,7 @@ class Runner:
             ),
             sink=self._session_sink,
         )
+        self._session_ready.set()
         self.sink.emit(Notice(text=f"session {name} — focus /{record.focus}"))
         if self.on_session:
             self.on_session(record)

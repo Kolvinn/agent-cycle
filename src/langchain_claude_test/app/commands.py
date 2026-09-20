@@ -57,6 +57,24 @@ BUILTINS: Mapping[str, str] = {
 #: Passed straight through to the SDK conversation in a chat mode.
 PASSTHROUGH: frozenset[str] = frozenset({"compact", "context", "cost", "usage", "clear", "status"})
 
+#: Commands that answer out of what the shell already holds: no model turn,
+#: no SDK client, no session record written. They run *beside* a turn instead
+#: of queueing behind it — *"it needs to be smooth and versitile enought to
+#: not interrupt workflwo."* Everything else keeps its place in the one queue
+#: on the one task that owns the clients.
+READ_ONLY: frozenset[str] = frozenset({"show", "panel", "sessions", "help", "modes", "copy", "expand", "wipe"})
+
+#: These write when they are given an argument and only print without one, so
+#: only the printing form takes the read-only lane.
+READ_ONLY_WITHOUT_ARGS: frozenset[str] = frozenset({"budget", "prices"})
+
+
+def is_read_only(command: Command) -> bool:
+    """Can this command be answered beside a turn in flight?"""
+    if command.name in READ_ONLY:
+        return True
+    return command.name in READ_ONLY_WITHOUT_ARGS and not command.args
+
 
 def parse(text: str) -> Command | None:
     """A command if the message starts with ``/``; otherwise ``None``."""

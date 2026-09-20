@@ -77,7 +77,7 @@ def make_runner(tmp_path: Path, harness: ScriptedHarness) -> tuple[Runner, ListS
 async def drive(runner: Runner, *lines: str) -> None:
     for line in lines:
         runner.submit(line)
-    await runner.queue.join()
+    await runner.idle()
 
 
 def notices(sink: ListSink) -> list[str]:
@@ -320,3 +320,66 @@ async def test_the_session_log_holds_result_events_only(tmp_path: Path):
     # the cycle's own record is all there
     assert {"TurnStarted", "TurnFinished", "ToolCalled", "ToolResult", "Priced", "StageFinished"} <= kinds
     assert any(line["event"] == "TextDone" and line["text"] == "the answer" for line in lines)
+
+
+@pytest.mark.asyncio
+async def test_read_only_commands_answer_while_a_turn_is_in_flight(tmp_path: Path):
+    """E58: "it needs to be smooth and versitile enought to not interrupt
+    workflwo." O-U6: every / command sat in the one FIFO queue behind whatever
+    turn was running, so looking at the graph meant waiting for the model."""
+    gate = asyncio.Event()
+
+    class BlockingChat(FakeChat):
+        async def send(self, text: str) -> str:
+            await gate.wait()
+            return await FakeChat.send(self, text)
+
+    FakeChat.instances.clear()
+    harness = ScriptedHarness(script=script(), approver=ScriptedApprover())
+    sink = ListSink()
+    config = AppConfig(cwd=tmp_path, sessions_dir=tmp_path / "sessions", modes=builtin_modes(PKG))
+    runner = Runner(
+        config=config,
+        sink=sink,
+        approver=harness.approver,
+        harness_factory=lambda r: harness,
+        chat_factory=BlockingChat,
+    )
+    harness.sink = sink
+    task = asyncio.create_task(runner.run("fast"))
+    try:
+        await runner._session_ready.wait()
+        runner.submit("a message that blocks")
+        await asyncio.sleep(0.05)
+        assert runner.busy and not sink.of(TextDone)
+
+        for line in ("/help", "/sessions", "/budget", "/prices"):
+            runner.submit(line)
+        await runner.fast_queue.join()
+        answered = notices(sink)
+        assert any("Built-ins" in n for n in answered)
+        assert any("focus=/chat" in n for n in answered)
+        assert any("the cycle's caps" in n for n in answered)
+        assert any("what a call costs" in n for n in answered)
+
+        # the turn is still where it was: read-only means read-only
+        assert runner.busy and not sink.of(TextDone)
+        assert runner.queue.qsize() == 0  # and it did not queue behind it
+
+        # a command that writes keeps its place in the one queue
+        runner.submit("/budget antithesis_base 9")
+        await asyncio.sleep(0.05)
+        assert runner.budgets.antithesis_base != 9
+
+        gate.set()
+        await runner.idle()
+        assert runner.budgets.antithesis_base == 9
+        assert FakeChat.instances[0].sent == ["a message that blocks"]
+        # and the model's reply landed after the read-only answers
+        texts = [i for i, e in enumerate(sink.events) if isinstance(e, TextDone)]
+        helps = [i for i, e in enumerate(sink.events) if isinstance(e, ev.Notice) and "Built-ins" in e.text]
+        assert helps and texts and helps[0] < texts[0]
+    finally:
+        gate.set()
+        await runner.stop()
+        await task
