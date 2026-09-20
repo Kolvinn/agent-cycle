@@ -100,11 +100,7 @@ class Runner:
     async def run(self, initial_session: str | None = None) -> None:
         async with sqlite_checkpointer(self.store.checkpoints) as saver:
             self._checkpointer = saver
-            if initial_session and self.store.exists(initial_session):
-                await self.open_session(initial_session)
-            else:
-                record = self.store.create(initial_session, mode=self.config.modes.default)
-                await self.open_session(record.name)
+            await self._open_initial(initial_session)
             fast = asyncio.create_task(self._read_only_lane())
             try:
                 while True:
@@ -123,6 +119,22 @@ class Runner:
             finally:
                 fast.cancel()
             await self._close_clients()
+
+    async def _open_initial(self, initial_session: str | None) -> None:
+        """A name opens it, or creates it. **No name reopens the last session**
+        rather than starting a blank one — as ``claude --continue`` does.
+        ``/new`` is how a fresh one is asked for."""
+        if initial_session:
+            if not self.store.exists(initial_session):
+                self.store.create(initial_session, mode=self.config.modes.default)
+            await self.open_session(initial_session)
+            return
+        last = self.store.latest()
+        if last is None:
+            last = self.store.create(None, mode=self.config.modes.default).name
+        else:
+            self.sink.emit(Notice(text=f"reopening {last}, the session last worked in — /new starts a fresh one"))
+        await self.open_session(last)
 
     async def _read_only_lane(self) -> None:
         """The second lane. In order among themselves, and never in the way."""

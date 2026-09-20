@@ -87,6 +87,18 @@ class SessionStore:
     def list(self) -> list[SessionRecord]:
         return [self.load(n) for n in self.names()]
 
+    def latest(self) -> str | None:
+        """The session last written to, or ``None`` when there are none.
+
+        By the record file's modification time: the record is rewritten on
+        every ``/model``, ``/effort``, ``/budget``, ``/prices`` and change of
+        focus, so mtime is "the one I was last working in". The name breaks a
+        tie, which for the generated ``s-<timestamp>`` names is chronological
+        — the fallback for a store restored from a copy that lost its times.
+        """
+        records = [(p.stat().st_mtime, p.stem) for p in self.root.glob("*.json")]
+        return max(records)[1] if records else None
+
     def load(self, name: str) -> SessionRecord:
         path = self._path(name)
         if not path.exists():

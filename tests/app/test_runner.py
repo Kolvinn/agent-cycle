@@ -383,3 +383,50 @@ async def test_read_only_commands_answer_while_a_turn_is_in_flight(tmp_path: Pat
         gate.set()
         await runner.stop()
         await task
+
+
+@pytest.mark.asyncio
+async def test_a_launch_with_no_name_reopens_the_last_session(tmp_path: Path):
+    """O-U7: every launch without a name created a new timestamped session,
+    which is how the audit found four abandoned ones. The Claude CLI has
+    --continue; here, no name means the session last worked in, and /new is
+    how a fresh one is asked for."""
+
+    async def launch(name: str | None) -> tuple[Runner, ListSink, asyncio.Task]:
+        harness = ScriptedHarness(script=script(), approver=ScriptedApprover())
+        runner, sink = make_runner(tmp_path, harness)
+        task = asyncio.create_task(runner.run(name))
+        await runner._session_ready.wait()
+        return runner, sink, task
+
+    FakeChat.instances.clear()
+    runner, sink, task = await launch(None)
+    first = runner.session.name
+    await drive(runner, "/effort high")  # rewrites the record, as real work does
+    await runner.stop()
+    await task
+
+    runner, sink, task = await launch(None)
+    assert runner.session.name == first, "a second launch started a new session"
+    assert runner.store.names() == [first], "and left a second record behind"
+    assert any("reopening" in n for n in notices(sink))
+    await drive(runner, "/new")
+    second = runner.session.name
+    assert second != first and sorted(runner.store.names()) == sorted([first, second])
+    await runner.stop()
+    await task
+
+    runner, sink, task = await launch(None)
+    assert runner.session.name == second  # the newest, not the first
+    await runner.stop()
+    await task
+
+    # a name still opens that one, and still creates it when it is new
+    runner, sink, task = await launch(first)
+    assert runner.session.name == first
+    await runner.stop()
+    await task
+    runner, sink, task = await launch("named")
+    assert runner.session.name == "named" and runner.store.exists("named")
+    await runner.stop()
+    await task
