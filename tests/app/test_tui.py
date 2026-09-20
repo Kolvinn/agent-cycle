@@ -266,6 +266,38 @@ async def test_a_tool_result_expands_and_copies_without_the_terminal(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_the_advertised_approve_key_approves(tmp_path: Path):
+    """The modal advertises "Approve  ctrl+y", but the focused words box is a
+    TextArea and TextArea binds ctrl+y to redo (_text_area.py:417). A screen
+    binding is checked from the focused widget up, so approve was unreachable
+    by its own key — only ctrl+n and Tab-then-Enter worked."""
+    from textual.widgets import TextArea
+
+    from langchain_claude_test.app.harness.protocol import ApprovalRequest, Verdict
+    from langchain_claude_test.app.tui.screens import ApprovalScreen
+
+    FakeChat.instances.clear()
+    config = AppConfig(cwd=tmp_path, sessions_dir=tmp_path / "sessions", modes=builtin_modes(PKG))
+    app = ProvenanceApp(config, "keys")
+    app.runner._harness_factory = lambda r: ScriptedHarness(script=script(), approver=ScriptedApprover())
+    app.runner._chat_factory = FakeChat
+    request = ApprovalRequest(kind="alteration", tool_use_id="t1", name="close_node", input={"target": "a1.1"}, title="close a1.1")
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause(0.2)
+        for key, approved in (("ctrl+y", True), ("ctrl+n", False)):
+            verdicts: list[Verdict] = []
+            app.push_screen(ApprovalScreen(request), lambda v: verdicts.append(v))
+            await pilot.pause(0.1)
+            assert isinstance(app.screen.focused, TextArea)  # the words box has the focus
+            app.screen.query_one("#words", TextArea).load_text("my words")
+            await pilot.press(key)
+            await pilot.pause(0.1)
+            assert verdicts == [Verdict(approved=approved, answered_by="human", words="my words")], key
+            assert not isinstance(app.screen, ApprovalScreen)
+
+
+@pytest.mark.asyncio
 async def test_ctrl_q_closes_the_clients_as_quit_does(tmp_path: Path):
     """O-U13: there were two ways out. `/quit` called on_quit (the app's exit)
     and *then* put QUIT on the queue to do the closing, and ctrl+q was

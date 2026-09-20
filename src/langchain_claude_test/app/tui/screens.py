@@ -45,8 +45,16 @@ class ApprovalScreen(ModalScreen[Verdict]):
     ApprovalScreen TextArea { height: 5; }
     ApprovalScreen Horizontal { height: 3; align: right middle; }
     """
-    #: ctrl+a is select-all in the words box, so the verdict keys are y/n.
-    BINDINGS = [("ctrl+y", "approve", "Approve"), ("ctrl+n", "refuse", "Refuse")]
+    #: ctrl+a is select-all in the words box, so the verdict keys are y/n —
+    #: and both are **priority**, because the focused widget is a ``TextArea``
+    #: and ``TextArea`` binds ctrl+y to redo (``_text_area.py:417``). A screen
+    #: binding is checked from the focused widget up, so without priority the
+    #: advertised approve key was swallowed by the words box and approve could
+    #: only be reached with Tab and Enter.
+    BINDINGS = [
+        Binding("ctrl+y", "approve", "Approve", priority=True),
+        Binding("ctrl+n", "refuse", "Refuse", priority=True),
+    ]
 
     def __init__(self, request: ApprovalRequest) -> None:
         super().__init__()
