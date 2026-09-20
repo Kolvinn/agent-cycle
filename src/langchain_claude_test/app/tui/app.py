@@ -162,6 +162,11 @@ class ProvenanceApp(App[None]):
             return
         await self.runner.interrupt()
 
+    async def action_quit(self) -> None:
+        """ctrl+q. Through the runner, so the clients close: Textual's own
+        ``action_quit`` exits the app and leaves the CLI processes behind."""
+        await self.runner.quit()
+
     def action_page_up(self) -> None:
         self.transcript.page_up()
 

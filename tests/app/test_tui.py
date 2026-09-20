@@ -266,6 +266,36 @@ async def test_a_tool_result_expands_and_copies_without_the_terminal(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_ctrl_q_closes_the_clients_as_quit_does(tmp_path: Path):
+    """O-U13: there were two ways out. `/quit` called on_quit (the app's exit)
+    and *then* put QUIT on the queue to do the closing, and ctrl+q was
+    Textual's own action_quit, which never told the runner at all — so the CLI
+    processes were left behind either way once the app's unwind cancelled the
+    runner's task."""
+    for key, line in (("ctrl+q", None), (None, "/quit")):
+        FakeChat.instances.clear()
+        config = AppConfig(cwd=tmp_path / str(key), sessions_dir=tmp_path / str(key) / "sessions", modes=builtin_modes(PKG))
+        app = ProvenanceApp(config, "leaving")
+        app.runner._harness_factory = lambda r: ScriptedHarness(script=script(), approver=ScriptedApprover())
+        app.runner._chat_factory = FakeChat
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause(0.2)
+            app.input.value = "open a client"
+            await pilot.press("enter")
+            await app.runner.idle()
+            await pilot.pause(0.2)
+            assert FakeChat.instances and not FakeChat.instances[0].closed
+
+            if key:
+                await pilot.press(key)
+            else:
+                app.input.value = line
+                await pilot.press("enter")
+            await pilot.pause(0.3)
+            assert FakeChat.instances[0].closed, f"{key or line} left the client open"
+
+
+@pytest.mark.asyncio
 async def test_the_transcript_says_which_frame_is_running(tmp_path: Path):
     """Audit A5. During a frame nothing on screen moved but "⋯ working": the
     transcript drew nothing for TurnStarted (O-U9) and the panel's pools only

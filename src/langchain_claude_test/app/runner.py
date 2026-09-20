@@ -156,6 +156,21 @@ class Runner:
     async def stop(self) -> None:
         self.queue.put_nowait(QUIT)
 
+    async def quit(self) -> None:
+        """The one way out — ``/quit`` and ctrl+q both come here.
+
+        The clients close **first**. ``on_quit`` is the app's ``exit``, and
+        this task does not survive the app's unwind, so a QUIT left on the
+        queue to do the closing might never be read and the CLI processes
+        would be left behind.
+        """
+        await self._close_clients()
+        await self.stop()
+        if self.on_quit:
+            result = self.on_quit()
+            if result is not None:
+                await result
+
     @property
     def busy(self) -> bool:
         return self._busy
@@ -294,11 +309,7 @@ class Runner:
             lines = [f"/{n} — {self.config.modes[n].kind}: {self.config.modes[n].description}" for n in self.config.modes.names()]
             self.sink.emit(Notice(text="\n".join(lines)))
         elif name == "quit":
-            if self.on_quit:
-                result = self.on_quit()
-                if result is not None:
-                    await result
-            await self.stop()
+            await self.quit()
         elif name == "interrupt":
             await self.interrupt()
         elif name == "new":
