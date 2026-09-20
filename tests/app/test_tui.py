@@ -266,6 +266,48 @@ async def test_a_tool_result_expands_and_copies_without_the_terminal(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_a_line_typed_behind_a_turn_is_marked_queued_and_the_status_says_where(tmp_path: Path):
+    """O-U15: a line typed while a turn ran was drawn exactly like the one
+    being answered, so there was no telling what had been picked up. O-U16:
+    the status line never said which directory the model works in, which is
+    what a bundled install (E59) most needs to show."""
+    import asyncio
+
+    gate = asyncio.Event()
+
+    class BlockingChat(FakeChat):
+        async def send(self, text: str) -> str:
+            await gate.wait()
+            return await FakeChat.send(self, text)
+
+    FakeChat.instances.clear()
+    work = tmp_path / "the-host-project"
+    work.mkdir()
+    config = AppConfig(cwd=work, sessions_dir=work / "sessions", modes=builtin_modes(PKG))
+    app = ProvenanceApp(config, "queued")
+    app.runner._harness_factory = lambda r: ScriptedHarness(script=script(), approver=ScriptedApprover())
+    app.runner._chat_factory = BlockingChat
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause(0.2)
+        assert plain(app.status).startswith("the-host-project  queued  /chat")
+
+        for line in ("first", "second", "third"):
+            app.input.value = line
+            await pilot.press("enter")
+        await pilot.pause(0.2)
+        drawn = [plain(w) for w in app.transcript.query(".user")]
+        assert drawn == ["› first", "› second   (queued)", "› third   (queued)"]
+
+        gate.set()
+        await app.runner.idle()
+        await pilot.pause(0.3)
+        drawn = [plain(w) for w in app.transcript.query(".user")]
+        assert drawn == ["› first", "› second", "› third"], "the marks did not clear in order"
+        assert [c.sent for c in FakeChat.instances] == [["first", "second", "third"]]
+
+
+@pytest.mark.asyncio
 async def test_an_interrupted_turn_takes_its_modal_with_it(tmp_path: Path):
     """Audit finding 1. Live, interrupting with an approval open makes the CLI
     abort the turn, which cancels the coroutine awaiting the answer. The modal

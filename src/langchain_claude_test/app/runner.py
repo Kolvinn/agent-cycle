@@ -85,6 +85,10 @@ class Runner:
         self._session_sink: EventSink = sink
         self._busy = False
         self.on_session: Callable[[SessionRecord | None], None] | None = None
+        #: Called with each queued line as it is taken off the queue to be
+        #: answered — the surface uses it to un-mark the line it drew as
+        #: waiting. FIFO, because the queue is.
+        self.on_dequeue: Callable[[str], None] | None = None
         self.on_quit: Callable[[], Awaitable[None] | None] | None = None
         #: Handled by the shell's surface (the TUI), not here: command name -> handler.
         self.surface_commands: dict[str, Callable[[str], Awaitable[None] | None]] = {}
@@ -115,6 +119,8 @@ class Runner:
                         break
                     try:
                         self._busy = True
+                        if self.on_dequeue:
+                            self.on_dequeue(str(item))
                         await self.handle(str(item))
                     except Exception as exc:  # the shell survives a failed turn; the user sees why
                         self._session_sink.emit(Notice(text=f"{type(exc).__name__}: {exc}", level="error"))

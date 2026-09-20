@@ -90,6 +90,7 @@ class ProvenanceApp(App[None]):
         self.approver = TuiApprover(self)
         self.runner = Runner(config=config, sink=self.sink, approver=self.approver)
         self.runner.on_session = self._session_changed
+        self.runner.on_dequeue = lambda _text: self.transcript.dequeued()
         self.runner.on_quit = self.exit
         self.runner.surface_commands["panel"] = self._panel_command
         self.runner.surface_commands["copy"] = self._copy_command
@@ -131,6 +132,7 @@ class ProvenanceApp(App[None]):
         self.status.set_busy(self.runner.busy)
 
     def _session_changed(self, record: SessionRecord | None) -> None:
+        self.status.set_cwd(self.config.cwd)
         self.status.set_session(record)
         self.status.set_settings(self.runner.settings.model, self.runner.settings.effort)
 
@@ -140,7 +142,11 @@ class ProvenanceApp(App[None]):
         text = event.text.strip()
         if not text:
             return
-        self.transcript.user(text, command=parse(text) is not None)
+        command = parse(text)
+        # A line typed while a turn runs waits in the queue; drawn plain it
+        # looked exactly like the one being answered.
+        queued = command is None and self.runner.busy
+        self.transcript.user(text, command=command is not None, queued=queued)
         self.runner.submit(text)
 
     def on_prompt_input_hint_changed(self, event: PromptInput.HintChanged) -> None:

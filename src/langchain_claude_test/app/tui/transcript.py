@@ -106,6 +106,7 @@ class Transcript(VerticalScroll):
     DEFAULT_CSS = """
     Transcript { padding: 0 1; }
     Transcript .user { color: $accent; margin: 1 0 0 0; text-style: bold; }
+    Transcript .user.queued { color: $text-muted; text-style: none; }
     Transcript .thinking { color: $text-muted; text-style: italic; margin: 0 0 0 2; }
     Transcript .assistant { margin: 0 0 0 0; }
     Transcript .notice { color: $text-muted; margin: 0 0 0 0; }
@@ -131,18 +132,39 @@ class Transcript(VerticalScroll):
         self._tool_order: list[ToolBlock] = []
         self._last_assistant = ""
         self._last_user = ""
+        #: (widget, text) for the lines waiting behind a turn in flight.
+        self._queued: list[tuple[Static, str]] = []
 
     # --- what the user typed ------------------------------------------------
 
-    def user(self, text: str, *, command: bool = False) -> None:
+    def user(self, text: str, *, command: bool = False, queued: bool = False) -> None:
         """``command`` marks a ``/`` line, which is an instruction to this
         shell rather than a message — ``/copy user`` skips them, or it would
-        only ever hand back the ``/copy`` that asked for it."""
+        only ever hand back the ``/copy`` that asked for it.
+
+        ``queued`` marks a line that is waiting behind a turn in flight, so a
+        line being answered and a line still in the queue do not look the
+        same. :meth:`dequeued` takes the mark off, oldest first, as the runner
+        reaches each one."""
         self._close_blocks()
         self.following = True
         if not command:
             self._last_user = text
-        self._add(Static(Text(f"› {text}"), classes="user"))
+        line = Static(Text(f"› {text}" + ("   (queued)" if queued else "")), classes="user")
+        if queued:
+            line.add_class("queued")
+            self._queued.append((line, text))
+        self._add(line)
+
+    def dequeued(self) -> None:
+        """The oldest waiting line is being answered now. FIFO, because the
+        queue it is waiting in is."""
+        while self._queued:
+            line, text = self._queued.pop(0)
+            if line.is_attached:
+                line.remove_class("queued")
+                line.update(Text(f"› {text}"))
+                return
 
     # --- getting text back out (E55, E62) --------------------------------------
 
@@ -177,6 +199,7 @@ class Transcript(VerticalScroll):
         self._thinking_block, self._thinking_buf = None, ""
         self._tools.clear()
         self._tool_order.clear()
+        self._queued.clear()
         self._last_assistant = self._last_user = ""
         self.following = True
 

@@ -9,6 +9,7 @@ its edges, evidence and history.
 from __future__ import annotations
 
 from collections import defaultdict
+from pathlib import Path
 
 from rich.text import Text
 from textual.containers import Vertical
@@ -122,6 +123,9 @@ class StatusBar(Static):
     def __init__(self, **kwargs) -> None:
         super().__init__("", **kwargs)
         self.session = "—"
+        #: Where the model works and the executor is fenced — and, when this
+        #: repo is installed into another project, which project that is.
+        self.cwd = ""
         self.focus_name = "chat"
         self.stage = ""
         self.cycle = 0
@@ -139,6 +143,10 @@ class StatusBar(Static):
         if record is not None:
             self.session = record.name
             self.focus_name = record.focus
+        self.refresh_line()
+
+    def set_cwd(self, cwd) -> None:
+        self.cwd = Path(cwd).name or str(cwd)
         self.refresh_line()
 
     def set_settings(self, model: str, effort: str) -> None:
@@ -174,4 +182,5 @@ class StatusBar(Static):
         state = "⋯ working" if self.busy else "idle"
         cost = f"  ~${self.cost:.3f}" if self.cost else ""
         effort = f" · {self.effort}" if self.effort else ""
-        self.update(Text(f"{self.session}  /{self.focus_name}{graph}  {self.model}{effort}{cost}  {state}   Esc interrupts · ctrl+g panel · /help"))
+        where = f"{self.cwd}  " if self.cwd else ""
+        self.update(Text(f"{where}{self.session}  /{self.focus_name}{graph}  {self.model}{effort}{cost}  {state}   Esc interrupts · ctrl+g panel · /help"))
