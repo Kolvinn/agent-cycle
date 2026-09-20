@@ -75,6 +75,23 @@ class PromptInput(TextArea):
                 return
         await super()._on_key(event)
 
+    async def _on_paste(self, event: events.Paste) -> None:
+        """A bracketed paste inserts whole and never sends — a paste is one
+        event, not a run of Enter keys, so ``_on_key`` above never sees it.
+
+        Claimed here so that the two delivery paths agree. The terminal's
+        path is the app's: the driver posts ``Paste`` to the app, which
+        forwards it to the focused widget (``textual/app.py:4142``). A
+        ``Paste`` posted straight at this widget would otherwise be inserted
+        three times — once by ``TextArea._on_paste``, again when the
+        unstopped event bubbles to the app and is forwarded back, and again
+        because Textual dispatches every ``_on_paste`` it finds on the MRO
+        (``textual/message_pump.py:757-800``) unless the default is prevented.
+        """
+        event.stop()
+        event.prevent_default()
+        await super()._on_paste(event)
+
     def submit(self) -> None:
         text = self.text.strip()
         if text:

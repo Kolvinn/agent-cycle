@@ -109,3 +109,48 @@ async def test_transcript_stops_following_when_the_reader_scrolls_up():
         t.apply(ev.Notice(text="tail"))
         await pilot.pause()
         assert t.scroll_y == t.max_scroll_y
+
+
+@pytest.mark.asyncio
+async def test_a_multiline_paste_inserts_and_does_not_send():
+    """E55: paste. A bracketed paste is one `Paste` event, not a run of Enter
+    keys, so `_on_key` never sees it and nothing is sent (audit A1 -> O).
+
+    Both delivery paths are checked. The terminal's is the app's: the driver
+    posts `Paste` to the app, which forwards it to the focused widget
+    (textual/app.py:4142). A `Paste` posted straight at the prompt is the
+    path a test takes, and it must insert once too -- `TextArea._on_paste`
+    does not stop the event, so without the prompt's override it bubbles to
+    the app and is forwarded back into the same widget, pasting twice.
+    """
+    from textual import events
+
+    app = PromptHarness()
+    async with app.run_test(size=(40, 12)) as pilot:
+        app.prompt.focus()
+        app.prompt.post_message(events.Paste("a\nb\nc"))
+        await pilot.pause()
+        assert app.prompt.text == "a\nb\nc"
+        assert app.submitted == []
+        assert app.prompt.styles.height.value == 5  # three lines plus the border
+
+        # the terminal's own path: the driver posts to the app, not the widget
+        app.prompt.load_text("")
+        app.post_message(events.Paste("one\ntwo\nthree"))
+        await pilot.pause()
+        assert app.prompt.text == "one\ntwo\nthree"
+        assert app.submitted == []
+
+        # a paste lands at the cursor, inside what is already typed
+        app.prompt.load_text("")
+        await pilot.press(*"head tail")
+        app.prompt.move_cursor((0, 4))
+        app.prompt.post_message(events.Paste("\nmiddle\n"))
+        await pilot.pause()
+        assert app.prompt.text == "head\nmiddle\n tail"
+        assert app.submitted == []
+
+        # and the pasted block is sent as one message when Enter is pressed
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.submitted == ["head\nmiddle\n tail"]
