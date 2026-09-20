@@ -463,7 +463,15 @@ async def test_escape_in_a_modal_leaves_the_modal_not_the_turn(tmp_path: Path):
         assert answers == [""]
         assert interrupts == []
 
-        # with no modal up, Esc still reaches the runner
+        # with no modal up and nothing running, Esc says so rather than
+        # silently doing nothing (O-U14)
+        assert not app.runner.busy
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        assert interrupts == []
+        assert any("nothing is running" in plain(w) for w in app.transcript.query(".notice"))
+
+        # and with a turn in flight it still reaches the runner
         app.runner._busy = True
         await pilot.press("escape")
         await pilot.pause(0.1)

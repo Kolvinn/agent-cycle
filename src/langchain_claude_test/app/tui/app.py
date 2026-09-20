@@ -160,6 +160,10 @@ class ProvenanceApp(App[None]):
         if callable(escape):
             escape()
             return
+        if not self.runner.busy:
+            # doing nothing looked the same as failing; say which it was
+            self.transcript.apply(ev.Notice(text="nothing is running — Esc had nothing to interrupt"))
+            return
         await self.runner.interrupt()
 
     async def action_quit(self) -> None:
