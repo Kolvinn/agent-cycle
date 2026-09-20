@@ -320,6 +320,10 @@ async def test_the_session_log_holds_result_events_only(tmp_path: Path):
     # the cycle's own record is all there
     assert {"TurnStarted", "TurnFinished", "ToolCalled", "ToolResult", "Priced", "StageFinished"} <= kinds
     assert any(line["event"] == "TextDone" and line["text"] == "the answer" for line in lines)
+    # and so are the shell's own lines: the runner emitted them on `sink`, and
+    # `events.jsonl` is fed by `_session_sink`, so the log never carried them
+    assert any(line["event"] == "Notice" and "cycle starting on" in line["text"] for line in lines)
+    assert any(line["event"] == "Notice" and "session logged" in line["text"] for line in lines)
 
 
 @pytest.mark.asyncio

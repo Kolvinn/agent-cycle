@@ -77,6 +77,11 @@ class Runner:
         self._graph: GraphDriver | None = None
         self._harness: Any = None
         self._checkpointer: Any = None
+        #: Everything the runner says goes here, not to ``sink`` directly:
+        #: once a session is open this is a fanout of the surface's sink and
+        #: the session's ``events.jsonl``, so the shell's own lines — which
+        #: are half of what a session did — are in the log too. Before a
+        #: session is open it is the surface's sink alone.
         self._session_sink: EventSink = sink
         self._busy = False
         self.on_session: Callable[[SessionRecord | None], None] | None = None
@@ -112,7 +117,7 @@ class Runner:
                         self._busy = True
                         await self.handle(str(item))
                     except Exception as exc:  # the shell survives a failed turn; the user sees why
-                        self.sink.emit(Notice(text=f"{type(exc).__name__}: {exc}", level="error"))
+                        self._session_sink.emit(Notice(text=f"{type(exc).__name__}: {exc}", level="error"))
                     finally:
                         self._busy = False
                         self.queue.task_done()
@@ -133,7 +138,7 @@ class Runner:
         if last is None:
             last = self.store.create(None, mode=self.config.modes.default).name
         else:
-            self.sink.emit(Notice(text=f"reopening {last}, the session last worked in — /new starts a fresh one"))
+            self._session_sink.emit(Notice(text=f"reopening {last}, the session last worked in — /new starts a fresh one"))
         await self.open_session(last)
 
     async def _read_only_lane(self) -> None:
@@ -144,7 +149,7 @@ class Runner:
                 await self._session_ready.wait()
                 await self.handle(str(item))
             except Exception as exc:
-                self.sink.emit(Notice(text=f"{type(exc).__name__}: {exc}", level="error"))
+                self._session_sink.emit(Notice(text=f"{type(exc).__name__}: {exc}", level="error"))
             finally:
                 self.fast_queue.task_done()
 
@@ -204,12 +209,12 @@ class Runner:
             sink=self._session_sink,
         )
         self._session_ready.set()
-        self.sink.emit(Notice(text=f"session {name} — focus /{record.focus}"))
+        self._session_sink.emit(Notice(text=f"session {name} — focus /{record.focus}"))
         if self.on_session:
             self.on_session(record)
         state = await self._graph.state()
         if state is not None:
-            self.sink.emit(self._graph.snapshot(state))
+            self._session_sink.emit(self._graph.snapshot(state))
 
     def _make_harness(self) -> Any:
         self._harness = self._harness_factory(self)
@@ -304,10 +309,10 @@ class Runner:
         if self.commands.is_mode(name):
             await self._switch_mode(name, cmd.args)
         elif name == "help":
-            self.sink.emit(Notice(text=self.commands.help_text()))
+            self._session_sink.emit(Notice(text=self.commands.help_text()))
         elif name == "modes":
             lines = [f"/{n} — {self.config.modes[n].kind}: {self.config.modes[n].description}" for n in self.config.modes.names()]
-            self.sink.emit(Notice(text="\n".join(lines)))
+            self._session_sink.emit(Notice(text="\n".join(lines)))
         elif name == "quit":
             await self.quit()
         elif name == "interrupt":
@@ -320,12 +325,12 @@ class Runner:
                 f"{r.name}  focus=/{r.focus}  mode=/{r.mode}  created={r.created}" + ("  (current)" if self.session and r.name == self.session.name else "")
                 for r in self.store.list()
             ]
-            self.sink.emit(Notice(text="\n".join(rows) or "no sessions yet"))
+            self._session_sink.emit(Notice(text="\n".join(rows) or "no sessions yet"))
         elif name == "resume":
             if not cmd.args:
-                self.sink.emit(Notice(text="usage: /resume <name>", level="warning"))
+                self._session_sink.emit(Notice(text="usage: /resume <name>", level="warning"))
             elif not self.store.exists(cmd.args):
-                self.sink.emit(Notice(text=f"no session named {cmd.args!r}", level="warning"))
+                self._session_sink.emit(Notice(text=f"no session named {cmd.args!r}", level="warning"))
             else:
                 await self.open_session(cmd.args)
         elif name == "fork":
@@ -346,11 +351,11 @@ class Runner:
             await self._show(cmd.args)
         elif self.commands.is_passthrough(name):
             if self.session.focus == "graph":
-                self.sink.emit(Notice(text=f"/{name} is a conversation command; leave the graph with /chat first", level="warning"))
+                self._session_sink.emit(Notice(text=f"/{name} is a conversation command; leave the graph with /chat first", level="warning"))
             else:
                 await self._plain(cmd.raw)
         else:
-            self.sink.emit(Notice(text=f"unknown command /{name} — /help lists them", level="warning"))
+            self._session_sink.emit(Notice(text=f"unknown command /{name} — /help lists them", level="warning"))
 
     async def _switch_mode(self, name: str, args: str) -> None:
         assert self.session is not None and self._graph is not None
@@ -361,24 +366,24 @@ class Runner:
             owed = await self._graph.pending()
             if args:
                 if owed:
-                    self.sink.emit(Notice(text=f"abandoning the unfinished cycle at {', '.join(owed)}; a new one starts on: {args}", level="warning"))
+                    self._session_sink.emit(Notice(text=f"abandoning the unfinished cycle at {', '.join(owed)}; a new one starts on: {args}", level="warning"))
                 else:
-                    self.sink.emit(Notice(text=f"cycle starting on: {args}"))
+                    self._session_sink.emit(Notice(text=f"cycle starting on: {args}"))
                 await self._graph.start_cycle(args)
             elif owed:
-                self.sink.emit(Notice(text=f"resuming the cycle at {', '.join(owed)} with the current caps and prices"))
+                self._session_sink.emit(Notice(text=f"resuming the cycle at {', '.join(owed)} with the current caps and prices"))
                 await self._graph.resume()
             else:
                 state = await self._graph.state()
                 if state is None or state.cycle == 0:
-                    self.sink.emit(Notice(text="in the graph. Start a cycle with /graph <query>."))
+                    self._session_sink.emit(Notice(text="in the graph. Start a cycle with /graph <query>."))
                 else:
-                    self.sink.emit(Notice(text=f"in the graph at cycle {state.cycle}, {state.stage}. Plain text continues the conversation."))
+                    self._session_sink.emit(Notice(text=f"in the graph at cycle {state.cycle}, {state.stage}. Plain text continues the conversation."))
             return
         self.session.focus = name
         self.session.mode = name
         self._save()
-        self.sink.emit(Notice(text=f"focus /{name}" + (f" — {mode.description}" if mode.description else "")))
+        self._session_sink.emit(Notice(text=f"focus /{name}" + (f" — {mode.description}" if mode.description else "")))
         if args:
             await self._plain(args)
 
@@ -391,7 +396,7 @@ class Runner:
                 driver = await self._chat(self.session.mode)
                 self._catalog = list(await driver.catalog())
             except Exception as exc:
-                self.sink.emit(Notice(text=f"could not list models from the CLI ({exc}); using the last known list", level="warning"))
+                self._session_sink.emit(Notice(text=f"could not list models from the CLI ({exc}); using the last known list", level="warning"))
         return self._catalog or list(FALLBACK_MODELS)
 
     def _choice(self, model: str) -> ModelChoice | None:
@@ -406,7 +411,7 @@ class Runner:
             options = [(c.value, f"{c.display} — {c.description}" if c.description else c.display) for c in await self.catalog()]
             picked = await self.approver.choose("Model", options, current=self.settings.model)
             if not picked:
-                self.sink.emit(Notice(text=f"model: {self.settings.model}  effort: {self.settings.effort}"))
+                self._session_sink.emit(Notice(text=f"model: {self.settings.model}  effort: {self.settings.effort}"))
                 return
             model = picked
         self.settings = self.settings.with_model(model)
@@ -417,10 +422,10 @@ class Runner:
         self._push_settings()
         choice = self._choice(model)
         if choice is not None and choice.efforts and self.settings.effort not in choice.efforts:
-            self.sink.emit(Notice(text=f"{choice.display} accepts effort {', '.join(choice.efforts)}; current is {self.settings.effort}", level="warning"))
+            self._session_sink.emit(Notice(text=f"{choice.display} accepts effort {', '.join(choice.efforts)}; current is {self.settings.effort}", level="warning"))
         elif choice is not None and not choice.efforts and self._catalog:
-            self.sink.emit(Notice(text=f"{choice.display} takes no effort level; /effort has no effect on it", level="warning"))
-        self.sink.emit(Notice(text=f"model set to {model} for new turns"))
+            self._session_sink.emit(Notice(text=f"{choice.display} takes no effort level; /effort has no effect on it", level="warning"))
+        self._session_sink.emit(Notice(text=f"model set to {model} for new turns"))
 
     async def _set_effort(self, level: str) -> None:
         assert self.session is not None
@@ -430,22 +435,22 @@ class Runner:
             options = [(lvl, f"{lvl} — {EFFORT_DESCRIPTIONS.get(lvl, '')}") for lvl in levels]
             picked = await self.approver.choose("Effort", options, current=self.settings.effort)
             if not picked:
-                self.sink.emit(Notice(text=f"effort: {self.settings.effort}"))
+                self._session_sink.emit(Notice(text=f"effort: {self.settings.effort}"))
                 return
             level = picked
         level = level.strip().lower()
         if level not in EFFORT_LEVELS:
-            self.sink.emit(Notice(text=f"effort must be one of {', '.join(EFFORT_LEVELS)}", level="warning"))
+            self._session_sink.emit(Notice(text=f"effort must be one of {', '.join(EFFORT_LEVELS)}", level="warning"))
             return
         if level not in levels:
-            self.sink.emit(Notice(text=f"{self.settings.model} accepts {', '.join(levels)}; setting {level} anyway", level="warning"))
+            self._session_sink.emit(Notice(text=f"{self.settings.model} accepts {', '.join(levels)}; setting {level} anyway", level="warning"))
         self.settings = self.settings.with_effort(level)
         self.session.effort = level
         self._save()
         for driver in self._chats.values():
             await driver.set_effort(level)
         self._push_settings()
-        self.sink.emit(Notice(text=f"effort set to {level} for new turns"))
+        self._session_sink.emit(Notice(text=f"effort set to {level} for new turns"))
 
     def _push_settings(self) -> None:
         if self._harness is not None and hasattr(self._harness, "settings"):
@@ -468,44 +473,44 @@ class Runner:
         assert self.session is not None
         parts = args.split()
         if not parts:
-            self.sink.emit(Notice(text="the cycle's caps (/budget <field> <n> sets one, /budget reset restores the defaults):\n" + self._budget_lines()))
+            self._session_sink.emit(Notice(text="the cycle's caps (/budget <field> <n> sets one, /budget reset restores the defaults):\n" + self._budget_lines()))
             return
         if parts[0] == "reset":
             self.session.budgets = {}
             self.budgets = self.config.budgets
         else:
             if len(parts) != 2 or parts[0] not in _BUDGET_FIELDS or not parts[1].lstrip("-").isdigit():
-                self.sink.emit(Notice(text=f"usage: /budget <field> <n>, where field is one of {', '.join(_BUDGET_FIELDS)}", level="warning"))
+                self._session_sink.emit(Notice(text=f"usage: /budget <field> <n>, where field is one of {', '.join(_BUDGET_FIELDS)}", level="warning"))
                 return
             value = int(parts[1])
             if value < 0 or (parts[0] in ("max_assumptions",) and value < 1):
-                self.sink.emit(Notice(text=f"{parts[0]} cannot be {value}", level="warning"))
+                self._session_sink.emit(Notice(text=f"{parts[0]} cannot be {value}", level="warning"))
                 return
             self.session.budgets[parts[0]] = value
             self.budgets = self.budgets.with_(**{parts[0]: value})
         self._save()
         await self._push_numbers()
-        self.sink.emit(Notice(text="caps for the next frame:\n" + self._budget_lines()))
+        self._session_sink.emit(Notice(text="caps for the next frame:\n" + self._budget_lines()))
 
     async def _set_price(self, args: str) -> None:
         assert self.session is not None
         parts = args.split()
         if not parts:
             lines = [f"  {k} = {v}" + (f"  [default {self.config.prices.get(k)}]" if self.config.prices.get(k) != v else "") for k, v in sorted(self.prices.items())]
-            self.sink.emit(Notice(text="what a call costs, by class (/prices <class> <n> sets one, /prices reset restores):\n" + "\n".join(lines)))
+            self._session_sink.emit(Notice(text="what a call costs, by class (/prices <class> <n> sets one, /prices reset restores):\n" + "\n".join(lines)))
             return
         if parts[0] == "reset":
             self.session.prices = {}
             self.prices = dict(self.config.prices)
         else:
             if len(parts) != 2 or parts[0] not in self.config.prices or not parts[1].isdigit():
-                self.sink.emit(Notice(text=f"usage: /prices <class> <n>, where class is one of {', '.join(sorted(self.config.prices))}", level="warning"))
+                self._session_sink.emit(Notice(text=f"usage: /prices <class> <n>, where class is one of {', '.join(sorted(self.config.prices))}", level="warning"))
                 return
             self.session.prices[parts[0]] = int(parts[1])
             self.prices[parts[0]] = int(parts[1])
         self._save()
         await self._push_numbers()
-        self.sink.emit(Notice(text="prices for the next frame: " + ", ".join(f"{k} {v}" for k, v in sorted(self.prices.items()))))
+        self._session_sink.emit(Notice(text="prices for the next frame: " + ", ".join(f"{k} {v}" for k, v in sorted(self.prices.items()))))
 
     async def _push_numbers(self) -> None:
         """The graph and the harness read the new numbers from the next frame on;
@@ -514,7 +519,7 @@ class Runner:
             self._graph.ctx = replace(self._graph.ctx, budgets=self.budgets, prices=self.prices)
             state = await self._graph.state()
             if state is not None:
-                self.sink.emit(self._graph.snapshot(state))
+                self._session_sink.emit(self._graph.snapshot(state))
         if self._harness is not None:
             if hasattr(self._harness, "budgets"):
                 self._harness.budgets = self.budgets
@@ -525,30 +530,30 @@ class Runner:
         assert self._graph is not None
         state = await self._graph.state()
         if state is None:
-            self.sink.emit(Notice(text="the graph is empty"))
+            self._session_sink.emit(Notice(text="the graph is empty"))
             return
         what, _, rest = (what or "graph").strip().partition(" ")
         what, rest = what.lower(), rest.strip()
         view = self._graph.ctx.store.view()
         if what == "package":
-            self.sink.emit(Notice(text=self._graph.package_text(state) or "(empty package)"))
+            self._session_sink.emit(Notice(text=self._graph.package_text(state) or "(empty package)"))
         elif what == "node":
-            self.sink.emit(Notice(text=package.describe_node(view, rest) if rest else "/show node <id>"))
+            self._session_sink.emit(Notice(text=package.describe_node(view, rest) if rest else "/show node <id>"))
         elif what == "neighbours":
             nid, _, depth = rest.partition(" ")
             hops = int(depth) if depth.strip().isdigit() else 1
-            self.sink.emit(Notice(text=package.describe_neighbours(view, nid, hops) if nid else "/show neighbours <id> [depth]"))
+            self._session_sink.emit(Notice(text=package.describe_neighbours(view, nid, hops) if nid else "/show neighbours <id> [depth]"))
         elif what == "search":
-            self.sink.emit(Notice(text=package.describe_search(view, rest) if rest else "/show search <text>"))
+            self._session_sink.emit(Notice(text=package.describe_search(view, rest) if rest else "/show search <text>"))
         elif what == "state":
-            self.sink.emit(Notice(text=state.model_dump_json(indent=1)[:6000]))
+            self._session_sink.emit(Notice(text=state.model_dump_json(indent=1)[:6000]))
         elif what == "budget":
             snap = self._graph.snapshot(state)
-            self.sink.emit(Notice(text="\n".join(f"{p}: {s} of {c}" for p, s, c in snap.pools) or "no pools yet"))
+            self._session_sink.emit(Notice(text="\n".join(f"{p}: {s} of {c}" for p, s, c in snap.pools) or "no pools yet"))
         else:
             snap = self._graph.snapshot(state)
-            self.sink.emit(snap)
-            self.sink.emit(Notice(text="\n".join("  " * d + label for d, _, label in snap.outline) or "(no nodes)"))
+            self._session_sink.emit(snap)
+            self._session_sink.emit(Notice(text="\n".join("  " * d + label for d, _, label in snap.outline) or "(no nodes)"))
 
     async def _fork(self, name: str | None) -> None:
         assert self.session is not None and self._graph is not None
@@ -574,4 +579,4 @@ class Runner:
             values["fork_conversation"] = bool(state.conversation)
             await target.seed(values, as_node=state.stage)
         await self.open_session(record.name)
-        self.sink.emit(Notice(text=f"forked {source.name} into {record.name}"))
+        self._session_sink.emit(Notice(text=f"forked {source.name} into {record.name}"))
