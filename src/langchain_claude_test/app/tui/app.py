@@ -76,6 +76,7 @@ class ProvenanceApp(App[None]):
         Binding("pagedown", "page_down", "Scroll down", priority=True),
         Binding("ctrl+end", "follow", "Jump to end", priority=True),
         Binding("ctrl+o", "expand", "Expand the last tool result", priority=True),
+        Binding("ctrl+l", "wipe", "Clear the screen", priority=True),
     ]
 
     #: What ``/copy`` can be asked for.
@@ -93,6 +94,7 @@ class ProvenanceApp(App[None]):
         self.runner.surface_commands["panel"] = self._panel_command
         self.runner.surface_commands["copy"] = self._copy_command
         self.runner.surface_commands["expand"] = self._expand_command
+        self.runner.surface_commands["wipe"] = self._wipe_command
         self.transcript = Transcript(id="transcript")
         self.panel = GraphPanel(id="panel")
         self.panel_width = PANEL_DEFAULT
@@ -173,6 +175,19 @@ class ProvenanceApp(App[None]):
 
     def action_expand(self) -> None:
         self._expand_command("")
+
+    def action_wipe(self) -> None:
+        self._wipe_command("")
+
+    def _wipe_command(self, args: str) -> None:
+        """``/wipe`` and ctrl+l — the screen, and only the screen.
+
+        Not ``/clear``: that is the CLI's own command, it is passed through to
+        the SDK conversation (``commands.py``), and taking the name would
+        silently change what muscle memory does to the conversation.
+        """
+        self.transcript.clear_transcript()
+        self.transcript.apply(ev.Notice(text="transcript cleared — the conversation is untouched (/clear does that)"))
 
     def _expand_command(self, args: str) -> None:
         """``/expand [n]`` — the nth tool result from the end, in full."""

@@ -167,6 +167,18 @@ class Transcript(VerticalScroll):
         self._autoscroll()
         return True
 
+    def clear_transcript(self) -> None:
+        """Empty the screen, and nothing else — no SDK conversation, no
+        session record, no graph. ``/clear`` is the CLI's and goes to the
+        conversation (``commands.py``); this is the screen's own."""
+        self.remove_children()
+        self._text_block, self._text_buf = None, ""
+        self._thinking_block, self._thinking_buf = None, ""
+        self._tools.clear()
+        self._tool_order.clear()
+        self._last_assistant = self._last_user = ""
+        self.following = True
+
     # --- following ------------------------------------------------------------------
 
     def _on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:

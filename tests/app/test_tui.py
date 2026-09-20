@@ -266,6 +266,48 @@ async def test_a_tool_result_expands_and_copies_without_the_terminal(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_wipe_clears_the_screen_and_clear_still_goes_to_the_conversation(tmp_path: Path):
+    """E55. There was no way to clear the screen at all (O-U11), and `/clear`
+    must keep meaning what the CLI means by it — it is passed through to the
+    SDK conversation (commands.py) — so the screen's own clear needs its own
+    name. `/wipe`, with ctrl+l beside it for the terminal-free path."""
+    FakeChat.instances.clear()
+    config = AppConfig(cwd=tmp_path, sessions_dir=tmp_path / "sessions", modes=builtin_modes(PKG))
+    app = ProvenanceApp(config, "wipe")
+    app.runner._harness_factory = lambda r: ScriptedHarness(script=script(), approver=ScriptedApprover())
+    app.runner._chat_factory = FakeChat
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause(0.2)
+        app.input.value = "something to remember"
+        await pilot.press("enter")
+        await app.runner.queue.join()
+        await pilot.pause(0.2)
+        assert any("echo: something to remember" in plain(w) for w in app.transcript.query(".assistant"))
+
+        app.input.value = "/wipe"
+        await pilot.press("enter")
+        await app.runner.queue.join()
+        await pilot.pause(0.2)
+        left = [plain(w) for w in app.transcript.query("Static")]
+        assert not any("something to remember" in t for t in left)
+        assert any("transcript cleared" in t for t in left)
+
+        # /clear is still the conversation's, and the transcript keeps its reply
+        app.input.value = "/clear"
+        await pilot.press("enter")
+        await app.runner.queue.join()
+        await pilot.pause(0.2)
+        assert FakeChat.instances[0].sent[-1] == "/clear"
+        assert any("echo: /clear" in plain(w) for w in app.transcript.query(".assistant"))
+
+        # ctrl+l is the same clear without a command
+        await pilot.press("ctrl+l")
+        await pilot.pause(0.2)
+        assert not any("echo: /clear" in plain(w) for w in app.transcript.query("Static"))
+
+
+@pytest.mark.asyncio
 async def test_escape_in_a_modal_leaves_the_modal_not_the_turn(tmp_path: Path):
     """Audit A2/A3 -> O. ``escape`` is an app-level *priority* binding
     (``tui/app.py:68``), and Textual checks priority bindings from the App
