@@ -179,6 +179,93 @@ async def test_every_terminal_size_renders_and_resizes_without_crashing(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_a_tool_result_expands_and_copies_without_the_terminal(tmp_path: Path):
+    """E55 "copy", E62 "any terminal". Textual copies out over OSC 52, which
+    some terminals and multiplexers drop, and a tool result was cut at 24
+    lines with the rest thrown away (tui/transcript.py:15,65-71). So the text
+    is kept, `/expand` and ctrl+o show it whole, and `/copy` puts it on the
+    clipboard from the keyboard — beside the mouse path, never instead of it.
+    """
+    from langchain_claude_test.app.harness import events as ev
+
+    FakeChat.instances.clear()
+    config = AppConfig(cwd=tmp_path, sessions_dir=tmp_path / "sessions", modes=builtin_modes(PKG))
+    app = ProvenanceApp(config, "copy")
+    app.runner._harness_factory = lambda r: ScriptedHarness(script=script(), approver=ScriptedApprover())
+    app.runner._chat_factory = FakeChat
+
+    body = "\n".join(f"line {i}" for i in range(30))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause(0.2)
+        app.input.value = "a message of mine"
+        await pilot.press("enter")
+        await app.runner.queue.join()
+        await pilot.pause(0.2)
+
+        app.transcript.apply(ev.ToolStarted(tool_use_id="t1", name="Read"))
+        app.transcript.apply(ev.ToolCalled(tool_use_id="t1", name="Read", input={"file_path": "a.py"}))
+        app.transcript.apply(ev.ToolResult(tool_use_id="t1", text=body, is_error=False))
+        await pilot.pause(0.1)
+        block = list(app.transcript.query(ToolBlock))[-1]
+        assert "line 23" in plain(block._body) and "line 24" not in plain(block._body)
+        assert "6 more lines" in plain(block._body)
+
+        # /expand shows the whole of it and opens the block
+        app.input.value = "/expand"
+        await pilot.press("enter")
+        await app.runner.queue.join()
+        await pilot.pause(0.2)
+        assert "line 29" in plain(block._body) and "more lines" not in plain(block._body)
+        assert not block.collapsed
+
+        # /copy tool copies the result in full, not the 24 lines that were drawn
+        app.input.value = "/copy tool"
+        await pilot.press("enter")
+        await app.runner.queue.join()
+        await pilot.pause(0.2)
+        assert app._clipboard == body
+
+        # /copy last is the model's last message; /copy user is mine, and the
+        # /commands I typed to get here are not messages
+        app.input.value = "/copy last"
+        await pilot.press("enter")
+        await app.runner.queue.join()
+        await pilot.pause(0.2)
+        assert app._clipboard == "[chat] echo: a message of mine"
+        app.input.value = "/copy user"
+        await pilot.press("enter")
+        await app.runner.queue.join()
+        await pilot.pause(0.2)
+        assert app._clipboard == "a message of mine"
+
+        # ctrl+o is the same thing without a command, for a second block
+        app.transcript.apply(ev.ToolStarted(tool_use_id="t2", name="Grep"))
+        app.transcript.apply(ev.ToolResult(tool_use_id="t2", text=body, is_error=False))
+        await pilot.pause(0.1)
+        second = list(app.transcript.query(ToolBlock))[-1]
+        assert "6 more lines" in plain(second._body)
+        await pilot.press("ctrl+o")
+        await pilot.pause(0.1)
+        assert "line 29" in plain(second._body)
+
+        # the mouse path, checked rather than assumed. The audit read
+        # ALLOW_SELECT = False at textual/widgets/_collapsible.py:22 as
+        # Collapsible's; it is CollapsibleTitle's. A drag lands on the
+        # innermost widget, which over the body is the result Static, so the
+        # result always could be dragged over -- the *title* row (name, input,
+        # price) is what cannot. That is the half /copy answers.
+        from textual.widgets._collapsible import Collapsible, CollapsibleTitle
+
+        assert CollapsibleTitle.ALLOW_SELECT is False
+        assert "ALLOW_SELECT" not in vars(Collapsible)
+        await pilot.mouse_down(second._body, offset=(0, 0))
+        await pilot.hover(second._body, offset=(6, 3))
+        await pilot.mouse_up(second._body, offset=(6, 3))
+        await pilot.pause(0.1)
+        assert (app.screen.get_selected_text() or "").startswith("line 0")
+
+
+@pytest.mark.asyncio
 async def test_escape_in_a_modal_leaves_the_modal_not_the_turn(tmp_path: Path):
     """Audit A2/A3 -> O. ``escape`` is an app-level *priority* binding
     (``tui/app.py:68``), and Textual checks priority bindings from the App

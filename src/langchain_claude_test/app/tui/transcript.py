@@ -22,7 +22,21 @@ def _one_line(value: object, limit: int = 100) -> str:
 
 
 class ToolBlock(Collapsible):
-    """One tool call: title carries name, input and price; body carries the result."""
+    """One tool call: title carries name, input and price; body carries the result.
+
+    The result is kept whole in :attr:`full_text` and only *drawn* short, so
+    ``/expand`` and ``/copy tool`` can reach the rest of it. Before, the lines
+    past the cut were thrown away at render time and were gone.
+
+    Selection, checked rather than assumed: the audit read
+    ``ALLOW_SELECT = False`` at ``textual/widgets/_collapsible.py:22`` as
+    ``Collapsible``'s, and it is ``CollapsibleTitle``'s (``Collapsible`` is
+    line 99 and sets nothing). The hit test under a mouse drag returns the
+    innermost widget, which over the body is the result ``Static``, so the
+    **result was always draggable**; what cannot be dragged over is the
+    *title* row — the tool's name, its input and its price. ``/copy tool``
+    is the path to the result that no terminal can eat (E62).
+    """
 
     DEFAULT_CSS = """
     ToolBlock { margin: 0 0 0 2; padding: 0; border: none; }
@@ -36,6 +50,9 @@ class ToolBlock(Collapsible):
         self.tool_name = name
         self._input = ""
         self._price = ""
+        #: The result as it arrived, uncut. Empty until one does.
+        self.full_text = ""
+        self._expanded = False
         self._body = Static("…", classes="tool-result")
         super().__init__(self._body, title=self._label(), collapsed=True)
 
@@ -59,16 +76,30 @@ class ToolBlock(Collapsible):
         self.add_class("refused")
         self._price = "  refused"
         self.title = self._label()
+        self.full_text = reason
         self._body.update(Text(reason, style="yellow"))
         self.collapsed = False
 
     def result(self, text: str, is_error: bool) -> None:
-        lines = text.splitlines() or [""]
-        shown = "\n".join(lines[:_RESULT_LINES]) + (f"\n… {len(lines) - _RESULT_LINES} more lines" if len(lines) > _RESULT_LINES else "")
+        self.full_text = text
         if is_error:
             self.add_class("error")
             self.collapsed = False
-        self._body.update(Text(shown))
+        self._draw()
+
+    def expand(self) -> None:
+        """Show the result whole, and open the block so it can be seen."""
+        self._expanded = True
+        self.collapsed = False
+        self._draw()
+
+    def _draw(self) -> None:
+        lines = self.full_text.splitlines() or [""]
+        if self._expanded or len(lines) <= _RESULT_LINES:
+            self._body.update(Text(self.full_text))
+            return
+        hidden = len(lines) - _RESULT_LINES
+        self._body.update(Text("\n".join(lines[:_RESULT_LINES]) + f"\n… {hidden} more lines — /expand or ctrl+o"))
 
 
 class Transcript(VerticalScroll):
@@ -94,13 +125,47 @@ class Transcript(VerticalScroll):
         self._thinking_block: Static | None = None
         self._thinking_buf = ""
         self._tools: dict[str, ToolBlock] = {}
+        #: Tool blocks in the order they appeared — ``/expand`` counts back
+        #: through this, and ``/copy tool`` takes the last with a result.
+        self._tool_order: list[ToolBlock] = []
+        self._last_assistant = ""
+        self._last_user = ""
 
     # --- what the user typed ------------------------------------------------
 
-    def user(self, text: str) -> None:
+    def user(self, text: str, *, command: bool = False) -> None:
+        """``command`` marks a ``/`` line, which is an instruction to this
+        shell rather than a message — ``/copy user`` skips them, or it would
+        only ever hand back the ``/copy`` that asked for it."""
         self._close_blocks()
         self.following = True
+        if not command:
+            self._last_user = text
         self._add(Static(Text(f"› {text}"), classes="user"))
+
+    # --- getting text back out (E55, E62) --------------------------------------
+
+    def last_text(self, kind: str) -> str | None:
+        """The last assistant message, tool result or message of the user's,
+        as text — what ``/copy`` puts on the clipboard. ``None`` when there is
+        none of that kind yet."""
+        if kind == "last":
+            return self._last_assistant or None
+        if kind == "user":
+            return self._last_user or None
+        if kind == "tool":
+            done = [b for b in self._tool_order if b.full_text]
+            return done[-1].full_text if done else None
+        return None
+
+    def expand_tool(self, nth_from_last: int = 1) -> bool:
+        """Show a tool result in full. 1 is the last one. False if there is none."""
+        done = [b for b in self._tool_order if b.full_text]
+        if not done or nth_from_last < 1 or nth_from_last > len(done):
+            return False
+        done[-nth_from_last].expand()
+        self._autoscroll()
+        return True
 
     # --- following ------------------------------------------------------------------
 
@@ -160,23 +225,17 @@ class Transcript(VerticalScroll):
                 if self._text_block is None:
                     self._text_block = Static("", classes="assistant")
                     self._add(self._text_block)
-                self._text_block.update(Markdown(text or self._text_buf))
+                self._last_assistant = text or self._text_buf
+                self._text_block.update(Markdown(self._last_assistant))
                 self._text_block, self._text_buf = None, ""
             case ev.ToolStarted(tool_use_id=tid, name=name):
                 self._close_text()
-                block = ToolBlock(tid, name)
-                self._tools[tid] = block
-                self._add(block)
+                self._tool(tid, name)
             case ev.ToolInputDelta(tool_use_id=tid, partial_json=chunk):
                 if tid in self._tools:
                     self._tools[tid].add_input_delta(chunk)
             case ev.ToolCalled(tool_use_id=tid, name=name, input=inp):
-                block = self._tools.get(tid)
-                if block is None:
-                    block = ToolBlock(tid, name)
-                    self._tools[tid] = block
-                    self._add(block)
-                block.set_input(inp)
+                self._tool(tid, name).set_input(inp)
             case ev.ToolResult(tool_use_id=tid, text=text, is_error=is_error):
                 if tid in self._tools:
                     self._tools[tid].result(text, is_error)
@@ -184,12 +243,7 @@ class Transcript(VerticalScroll):
                 if tid in self._tools:
                     self._tools[tid].priced(price, remaining)
             case ev.Refused(tool_use_id=tid, name=name, reason=reason):
-                block = self._tools.get(tid)
-                if block is None:
-                    block = ToolBlock(tid, name)
-                    self._tools[tid] = block
-                    self._add(block)
-                block.refused(reason)
+                self._tool(tid, name).refused(reason)
             case ev.ApprovalAsked(name=name, title=title):
                 self._add(Static(Text(f"? {title or name} — waiting for you"), classes="approval"))
             case ev.ApprovalAnswered(name=name, approved=approved, words=words, answered_by=by):
@@ -216,8 +270,20 @@ class Transcript(VerticalScroll):
         self.mount(widget)
         self._autoscroll()
 
+    def _tool(self, tool_use_id: str, name: str) -> ToolBlock:
+        """The block for this call, mounted the first time it is asked for.
+        Three events can be the first to mention a call."""
+        block = self._tools.get(tool_use_id)
+        if block is None:
+            block = ToolBlock(tool_use_id, name)
+            self._tools[tool_use_id] = block
+            self._tool_order.append(block)
+            self._add(block)
+        return block
+
     def _close_text(self) -> None:
         if self._text_block is not None and self._text_buf:
+            self._last_assistant = self._text_buf
             self._text_block.update(Markdown(self._text_buf))
         self._text_block, self._text_buf = None, ""
 

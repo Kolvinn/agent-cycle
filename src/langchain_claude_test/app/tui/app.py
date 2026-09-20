@@ -12,6 +12,7 @@ from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.widgets import Static
 
+from ..commands import parse
 from ..config import AppConfig
 from ..harness import events as ev
 from ..runner import Runner
@@ -74,7 +75,11 @@ class ProvenanceApp(App[None]):
         Binding("pageup", "page_up", "Scroll up", priority=True),
         Binding("pagedown", "page_down", "Scroll down", priority=True),
         Binding("ctrl+end", "follow", "Jump to end", priority=True),
+        Binding("ctrl+o", "expand", "Expand the last tool result", priority=True),
     ]
+
+    #: What ``/copy`` can be asked for.
+    COPY_KINDS = ("last", "tool", "user")
 
     def __init__(self, config: AppConfig, session: str | None = None) -> None:
         super().__init__()
@@ -86,6 +91,8 @@ class ProvenanceApp(App[None]):
         self.runner.on_session = self._session_changed
         self.runner.on_quit = self.exit
         self.runner.surface_commands["panel"] = self._panel_command
+        self.runner.surface_commands["copy"] = self._copy_command
+        self.runner.surface_commands["expand"] = self._expand_command
         self.transcript = Transcript(id="transcript")
         self.panel = GraphPanel(id="panel")
         self.panel_width = PANEL_DEFAULT
@@ -131,7 +138,7 @@ class ProvenanceApp(App[None]):
         text = event.text.strip()
         if not text:
             return
-        self.transcript.user(text)
+        self.transcript.user(text, command=parse(text) is not None)
         self.runner.submit(text)
 
     def on_prompt_input_hint_changed(self, event: PromptInput.HintChanged) -> None:
@@ -161,6 +168,39 @@ class ProvenanceApp(App[None]):
 
     def action_follow(self) -> None:
         self.transcript.follow()
+
+    # --- getting text back out (E55, E62) --------------------------------------
+
+    def action_expand(self) -> None:
+        self._expand_command("")
+
+    def _expand_command(self, args: str) -> None:
+        """``/expand [n]`` — the nth tool result from the end, in full."""
+        arg = args.strip().lower()
+        if arg and arg != "last" and not arg.isdigit():
+            self.transcript.apply(ev.Notice(text="usage: /expand [n] — n counts back from the last tool result", level="warning"))
+            return
+        nth = int(arg) if arg.isdigit() else 1
+        if not self.transcript.expand_tool(nth):
+            self.transcript.apply(ev.Notice(text="no tool result to expand", level="warning"))
+
+    def _copy_command(self, args: str) -> None:
+        """``/copy [last|tool|user]`` — the keyboard path to the clipboard.
+
+        Textual copies over OSC 52, which some terminals drop, so this says
+        how much it copied: if nothing lands in your clipboard, the terminal
+        ate it and the text is still on screen to select by hand (E62).
+        """
+        kind = args.strip().lower() or "last"
+        if kind not in self.COPY_KINDS:
+            self.transcript.apply(ev.Notice(text=f"usage: /copy [{'|'.join(self.COPY_KINDS)}]", level="warning"))
+            return
+        text = self.transcript.last_text(kind)
+        if text is None:
+            self.transcript.apply(ev.Notice(text=f"nothing to copy: no {kind} in this transcript yet", level="warning"))
+            return
+        self.copy_to_clipboard(text)
+        self.transcript.apply(ev.Notice(text=f"copied {len(text)} characters ({kind})"))
 
     # --- the graph panel ---------------------------------------------------------------
 

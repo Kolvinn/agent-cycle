@@ -43,6 +43,8 @@ BUILTINS: Mapping[str, str] = {
     "model": "/model [alias] — pick from the CLI's own model list, or set one directly (sonnet, opus, haiku, default, a full id)",
     "effort": "/effort [level] — pick the effort level (low, medium, high, xhigh, max)",
     "panel": "/panel [show|hide|<width>|view outline|kind|status] — the graph browser (ctrl+g toggles, ctrl+b cycles the view, ctrl+left/right resize; select a node to see it in full)",
+    "copy": "/copy [last|tool|user] — the last assistant message, tool result (in full) or message of yours, to the clipboard; ctrl+c copies a mouse selection instead",
+    "expand": "/expand [n] — show a tool result in full instead of its first 24 lines; n counts back from the last (ctrl+o does the last)",
     "show": "/show graph|package|budget|state | node <id> | neighbours <id> [depth] | search <text> — inspect the graph",
     "budget": "/budget [<field> <n> | reset] — the cycle's caps (per_assumption, antithesis_base, orientation_base, synthesis_points, max_assumptions …); no args lists them",
     "prices": "/prices [<class> <n> | reset] — what a tool call costs by class (survey, read, webfetch); no args lists them",
