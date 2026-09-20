@@ -206,6 +206,39 @@ HarnessEvent = Union[
 ]
 
 
+#: What the per-session log on disk keeps — *"you should have the logs output
+#: individual stream tokens though, that's too much, just result messages."*
+#: An allow-list rather than a deny-list, so a stream event added later cannot
+#: leak onto disk by being forgotten.
+RESULT_EVENTS: tuple[type, ...] = (
+    TurnStarted,
+    TurnFinished,
+    SessionInfo,
+    ThinkingDone,
+    TextDone,
+    ToolCalled,
+    ToolResult,
+    Priced,
+    Refused,
+    ApprovalAsked,
+    ApprovalAnswered,
+    StageStarted,
+    StageFinished,
+    StateSnapshot,
+    Notice,
+)
+
+#: Deliberately not logged, each for its own reason. The three deltas are the
+#: "individual stream tokens". ``ToolStarted`` is the opening of a block that
+#: ``ToolCalled`` carries whole. ``ResultText`` is the CLI's own copy of the
+#: final text of a chat turn, which ``TextDone`` already holds
+#: (``harness/stream.py:102``).
+#:
+#: Every member of :data:`HarnessEvent` is in one list or the other, and a
+#: test asserts it — so a new event type fails loudly instead of being guessed.
+NOT_LOGGED: tuple[type, ...] = (ThinkingDelta, TextDelta, ToolInputDelta, ToolStarted, ResultText)
+
+
 class EventSink(Protocol):
     def emit(self, event: HarnessEvent) -> None: ...
 
@@ -227,13 +260,21 @@ class ListSink:
 
 
 class JsonlSink:
-    """Appends one line per event. Open-append-close, so a crash loses nothing."""
+    """Appends one line per **result-level** event. Open-append-close, so a
+    crash loses nothing.
+
+    Stream deltas are dropped rather than written: see :data:`RESULT_EVENTS`
+    and :data:`NOT_LOGGED`. The screen still gets everything — the TUI is a
+    different sink — so this only changes what is kept.
+    """
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def emit(self, event: HarnessEvent) -> None:
+        if not isinstance(event, RESULT_EVENTS):
+            return
         line = {
             "at": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
             "event": type(event).__name__,

@@ -278,3 +278,45 @@ async def test_graph_alone_resumes_an_interrupted_cycle(tmp_path: Path):
     finally:
         await runner.stop()
         await task
+
+
+@pytest.mark.asyncio
+async def test_the_session_log_holds_result_events_only(tmp_path: Path):
+    """E64: "you should have the logs output individual stream tokens though,
+    that's too much, just result messages." JsonlSink wrote every event it was
+    handed, deltas included (O-U12)."""
+    import json
+    from typing import get_args
+
+    # every event type is classified, so adding one fails here rather than
+    # being silently written or silently dropped
+    assert set(get_args(ev.HarnessEvent)) == set(ev.RESULT_EVENTS) | set(ev.NOT_LOGGED)
+    assert not set(ev.RESULT_EVENTS) & set(ev.NOT_LOGGED)
+
+    FakeChat.instances.clear()
+    harness = ScriptedHarness(script=script(), approver=ScriptedApprover())
+    runner, sink = make_runner(tmp_path, harness)
+    task = asyncio.create_task(runner.run("logged"))
+    try:
+        await drive(runner, "/help")  # the session -- and its log -- is open by now
+        harness.sink = runner._session_sink
+        await drive(runner, f"/graph {QUESTION}")
+        log = runner._session_sink
+        log.emit(ev.TextDelta(text="tok"))
+        log.emit(ev.ThinkingDelta(text="tok"))
+        log.emit(ev.ToolInputDelta(tool_use_id="t1", partial_json="{"))
+        log.emit(ev.ToolStarted(tool_use_id="t1", name="Read"))
+        log.emit(ev.ResultText(text="the CLI's own copy"))
+        log.emit(ev.TextDone(text="the answer"))
+
+        lines = [json.loads(line) for line in runner.store.events_path("logged").read_text().splitlines()]
+    finally:
+        await runner.stop()
+        await task
+
+    kinds = {line["event"] for line in lines}
+    assert kinds and not kinds & {t.__name__ for t in ev.NOT_LOGGED}
+    assert kinds <= {t.__name__ for t in ev.RESULT_EVENTS}
+    # the cycle's own record is all there
+    assert {"TurnStarted", "TurnFinished", "ToolCalled", "ToolResult", "Priced", "StageFinished"} <= kinds
+    assert any(line["event"] == "TextDone" and line["text"] == "the answer" for line in lines)
